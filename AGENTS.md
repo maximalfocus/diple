@@ -26,6 +26,9 @@ palette; the agent's output is never repainted with different attributes.
   digits only, in order, tolerant of wrapping and decoration.
 - `internal/card` — cards of every kind, anchors, attachments, the tray, and
   its per-session persistence and stash slot under the user's state directory.
+- `internal/shim` — the same-named executables that put Diple ahead of the
+  real CLIs on PATH, the `PATH` block in the user's startup files, and the
+  report behind `diple status`.
 - `internal/keys` — the binding table: every gesture Diple owns, its default
   key, and the user's `bindings.conf` read over the defaults.
 - `internal/attach` — what an instruction card's attachment refers to: a path
@@ -65,6 +68,18 @@ stays open: a path is compiled as a reference, and a command is run once, then,
 and what it printed travels with the card. `diple stash` sets an agent's saved
 tray aside in one slot and `diple unstash` gives it to that agent's next
 session.
+
+## Shims and default-on
+
+`diple on` writes one shim per registered adapter into `$XDG_DATA_HOME/diple/bin`
+and adds a marked block to the user's startup files that puts that directory
+first on `PATH`; `diple off` removes exactly what it added. A shim uses shell
+builtins only, because it may run under a `PATH` that holds nothing but its own
+directory and the real agent's, and it exports its own directory as
+`DIPLE_SHIM_DIR` so Diple skips it when it looks for the real CLI. Diple also
+refuses to execute anything carrying the shim marker, so a mis-set `PATH` can
+never become an exec loop. `DIPLE=0` runs the real CLI for one invocation, and
+`Alt+H` hides the layer for the rest of a session without ending it.
 
 ## The keyboard and the agent's own dialogs
 

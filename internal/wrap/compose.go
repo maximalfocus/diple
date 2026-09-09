@@ -10,6 +10,9 @@ import (
 // ownsScreen reports whether anything of Diple's is showing, which is when
 // the session must composite instead of passing bytes through.
 func (s *Session) ownsScreen() bool {
+	if s.hidden {
+		return false
+	}
 	return s.Tray.Len() > 0 || s.sel != nil || s.editor != nil || s.search != nil || s.chooser || s.highlight != nil
 }
 
@@ -17,6 +20,9 @@ func (s *Session) ownsScreen() bool {
 // the terminal.
 func (s *Session) trayHeight() int {
 	n := s.Tray.Len()
+	if s.hidden {
+		return 0
+	}
 	if n == 0 {
 		return 0
 	}

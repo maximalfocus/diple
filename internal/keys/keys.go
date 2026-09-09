@@ -44,6 +44,7 @@ const (
 	TrayEdit    Action = "tray-edit"      // edit the selected card
 	TrayDelete  Action = "tray-delete"    // delete the selected card
 	TrayNew     Action = "tray-new"       // offer the free card kinds from the tray
+	Hide        Action = "hide"           // hide the layer for the rest of the session
 	Cancel      Action = "cancel"         // dismiss what Diple is showing
 )
 
@@ -53,7 +54,7 @@ var Actions = []Action{
 	SelectBlock, NextBlock, PrevBlock, SelectLine, ExtendLine,
 	Span, ExtendChar, ShrinkChar, ExtendWord, ShrinkWord,
 	TrayFocus, TrayNext, TrayPrev, TrayMoveUp, TrayMoveDn, TrayEdit, TrayDelete, TrayNew,
-	Cancel,
+	Hide, Cancel,
 }
 
 // Key is one binding: a rune, or a named key, with or without Alt. Alt is
@@ -142,6 +143,7 @@ func Defaults() Table {
 		TrayEdit:    {Rune: 'e'},
 		TrayDelete:  {Rune: 'd'},
 		TrayNew:     {Rune: '+'},
+		Hide:        {Rune: 'h', Alt: true},
 		Cancel:      {Rune: 0x1b},
 	}
 }
