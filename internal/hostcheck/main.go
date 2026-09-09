@@ -27,22 +27,44 @@ var truecolour = regexp.MustCompile(`\x1b\[[0-9;]*\b(38|48);2;`)
 // and underline are allowed.
 var sgr = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
 
+// driven names the hosts R-014 puts in the driven class: those offering a
+// documented way to type into a running window from outside. Their captures
+// must carry a gesture and the card it made. Every other host, named or not,
+// is pass-through only, and its capture covers forwarding, the mouse
+// envelope, and restore. A driven host with no gesture in its capture was not
+// driven at all, and saying so is the point: falling back to the pass-through
+// check is how an unverified host came to report a pass.
+var drivenHosts = map[string]bool{
+	"wezterm": true,
+	"kitty":   true,
+	"tmux":    true,
+	"herdr":   true,
+}
+
 func main() {
 	host := flag.String("host", "", "the host the capture came from")
+	version := flag.String("host-version", "", "the version of the host it came from")
 	plain := flag.Bool("plain", false, "the capture was recorded with --plain")
 	flag.Parse()
 	if flag.NArg() != 1 || *host == "" {
-		fmt.Fprintln(os.Stderr, "usage: hostcheck --host <name> [--plain] <capture>")
+		fmt.Fprintln(os.Stderr, "usage: hostcheck --host <name> [--host-version <v>] [--plain] <capture>")
 		os.Exit(64)
+	}
+	// R-014 records the version a host was verified at, as R-012 does for an
+	// adapter's CLI: a host's control interface is a versioned dependency,
+	// and a run that does not name it cannot be read later.
+	named := *host
+	if *version != "" {
+		named = fmt.Sprintf("%s %s", *host, *version)
 	}
 	failures := check(*host, flag.Arg(0), *plain)
 	for _, f := range failures {
-		fmt.Fprintf(os.Stderr, "FAIL %s: %s\n", *host, f)
+		fmt.Fprintf(os.Stderr, "FAIL %s: %s\n", named, f)
 	}
 	if len(failures) > 0 {
 		os.Exit(1)
 	}
-	fmt.Printf("PASS %s: %s\n", *host, flag.Arg(0))
+	fmt.Printf("PASS %s: %s\n", named, flag.Arg(0))
 }
 
 func check(host, path string, plain bool) []string {
@@ -94,7 +116,11 @@ func check(host, path string, plain bool) []string {
 		}
 	}
 	if !exercised(rec) {
-		fmt.Printf("note %s: no gesture could be typed into this host; the capture covers pass-through, the envelope, and restore\n", host)
+		if drivenHosts[host] {
+			failures = append(failures, "this host is driven, but no gesture reached its capture: it was not verified")
+		} else {
+			fmt.Printf("note %s: pass-through only; the capture covers forwarding, the envelope, and restore\n", host)
+		}
 	}
 	return failures
 }

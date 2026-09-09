@@ -48,6 +48,29 @@ func TestAGestureMustMakeACard(t *testing.T) {
 	}
 }
 
+func TestADrivenHostWithNoGestureFailsRatherThanDegrading(t *testing.T) {
+	// tmux is driven, so a capture with nothing typed into it means the
+	// gesture never arrived, not that the host cannot be typed into. This
+	// is the case that used to report a pass.
+	f := check("tmux", capture(t, reply), false)
+	if len(f) == 0 || !strings.Contains(strings.Join(f, "\n"), "no gesture reached its capture") {
+		t.Fatalf("failures = %v", f)
+	}
+	// The same host driven properly passes.
+	if f := check("tmux", capture(t, reply, "\x1bn", "q", "which ports?\r"), false); len(f) != 0 {
+		t.Fatalf("failures = %v", f)
+	}
+}
+
+func TestAPassThroughHostWithNoGestureIsNotAFailure(t *testing.T) {
+	// Ghostty offers no way to type into a running window from outside, so
+	// its capture covers forwarding, the envelope, and restore, and that is
+	// the whole of what R-014 asks of it.
+	if f := check("ghostty", capture(t, reply), false); len(f) != 0 {
+		t.Fatalf("failures = %v", f)
+	}
+}
+
 func TestPlainIsCheckedAgainstTheDrawingMode(t *testing.T) {
 	p := capture(t, reply, "\x1bn", "q", "which ports?\r")
 	// The capture was not recorded with --plain, so checking it as if it

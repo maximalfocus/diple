@@ -23,7 +23,9 @@ go test -race ./...
 CI runs the same on Linux and macOS and cross-compiles darwin/linux ×
 amd64/arm64. `scripts/verify-hosts.sh` records a wrapped session in each host
 the portability list names and checks the capture; it is the release-boundary
-check, not part of CI, because it needs those terminals installed.
+check, not part of CI, because it needs those terminals installed. Hosts that
+can be typed into from outside must also show that a gesture made a card, and
+one of those failing to take the gesture is a failure, not a lesser pass.
 
 ## Layout
 

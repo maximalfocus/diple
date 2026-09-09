@@ -26,30 +26,47 @@ re-checked, the domain is registered, and the repository is made public.
 `scripts/verify-hosts.sh` records a wrapped session in a host and checks the
 capture: the mouse envelope was asked for and given back, the agent's bytes
 were forwarded unchanged while the tray was empty, Diple drew no 24-bit colour,
-and the terminal was left as it was found. Where the host can be typed into,
-the check also requires that a gesture made a card and drew the tray.
-`scripts/verify-hosts.sh --plain` additionally requires that Diple's drawing
-used only reverse and underline.
+and the terminal was left as it was found. R-014 puts every host in one of two
+classes and the check enforces the difference. A **driven** host offers a
+documented way to type into a running window from outside, so its capture must
+also carry a gesture and the card that gesture made. A **pass-through only**
+host offers none, so forwarding, the envelope, and restore are the whole of
+what it can show. A driven host whose gesture does not arrive fails the run
+instead of falling back to the pass-through check, and a host that is absent is
+reported apart from one that is present and could not be driven.
+`scripts/verify-hosts.sh --plain` additionally requires that Diple's own
+drawing used only reverse and underline.
 
-| Host | Capture | Gesture | Notes |
-|---|---|---|---|
-| Terminal.app | pass | — | opens with `open -a`; nothing can type into it from outside |
-| WezTerm | pass | — | `wezterm cli send-text` targets the active pane, not the new window |
-| kitty | pass | pass | remote control types the gesture |
-| Ghostty | pending | — | needs one interactive first launch before it will run a command |
-| iTerm2 | pending | — | needs one interactive first launch before it will run a command |
-| tmux | pass | pass | `send-keys` types the gesture |
-| herdr | pass | pass | `agent send` types the gesture |
-| `--plain` | pass | pass | recorded in tmux, kitty, and herdr |
+Each row was recorded twice, once in each drawing mode, and names the host
+version it ran against as R-012 does for an adapter's CLI.
 
-Ghostty and iTerm2 are installed but have never been opened by a person on the
-verification machine, and both sit behind a first-run window until one does.
-Once either has been opened once, its row is one command:
-`scripts/verify-hosts.sh ghostty` or `scripts/verify-hosts.sh iterm2`.
+| Host | Class | Result | Version | Machine |
+|---|---|---|---|---|
+| WezTerm | driven | pass, gesture | 20240203-110809-5046fc22 | Linux amd64 |
+| kitty | driven | pass, gesture | 0.45.0 | Linux amd64 |
+| `tmux` | driven | pass, gesture | 3.6 | Linux amd64 |
+| `herdr` | driven | pass, gesture | 0.8.2 | Linux amd64 |
+| Ghostty | pass-through | pass | 1.3.0 | Linux amd64 |
+| Terminal.app | pass-through | re-run needed | — | macOS arm64 |
+| iTerm2 | pass-through | pending | — | macOS arm64 |
+
+Ghostty needs no first launch on Linux, where it takes `-e` on PATH rather than
+from inside a bundle; its Linux capture is what R-014 asks of a pass-through
+host, and it is the same check the macOS bundle would produce.
+
+Terminal.app passed an earlier run whose captures were machine-specific and
+whose host version was not recorded, so under R-014 it needs one re-run to name
+its version: `scripts/verify-hosts.sh terminal.app`, which drives nothing and
+needs nobody at the display.
+
+iTerm2 is installed on the macOS machine but has never been opened by a person
+there, and it sits behind a first-run window until one does. Once it has been
+opened once, its row is one command: `scripts/verify-hosts.sh iterm2`.
 
 ## Left for the release itself
 
-- [ ] Ghostty and iTerm2 captures, after their first launch.
+- [ ] The iTerm2 capture, after its first launch, and the Terminal.app re-run
+      that records its version.
 - [ ] Register `getdiple.sh`.
 - [ ] Cut the release, fill the formula's URLs and checksums, publish the tap.
 - [ ] Make the repository public. This is a separate, explicitly invoked step —
