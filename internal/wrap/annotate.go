@@ -1,10 +1,12 @@
 package wrap
 
 import (
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/maximalfocus/diple/internal/adapter"
+	"github.com/maximalfocus/diple/internal/attach"
 	"github.com/maximalfocus/diple/internal/blocks"
 	"github.com/maximalfocus/diple/internal/card"
 )
@@ -21,13 +23,20 @@ type selection struct {
 	absolute    int
 }
 
-// editor is the one-line inline editor under a selection or a card.
+// editor is the one-line inline editor under a selection or a card. A note
+// carries a tag; a free card carries its kind instead.
 type editor struct {
 	tag         card.Tag
+	kind        card.Kind
 	text        []rune
 	first, last int // history rows the editor sits under
 	editing     *card.Card
 	sel         *selection
+	// attached is what the editor has attached so far, for a card that
+	// takes attachments.
+	attached []card.Attachment
+	// note is a transient line under the field, such as a failed capture.
+	note string
 }
 
 type dragState struct {
@@ -216,6 +225,8 @@ func (s *Session) openEditorLocked(tag card.Tag, sel *selection, editing *card.C
 		e.first, e.last = sel.first, sel.last
 	}
 	if editing != nil {
+		e.kind = editing.Kind
+		e.attached = append([]card.Attachment(nil), editing.Attachments...)
 		e.text = []rune(editing.Text)
 		if first, last, ok := s.resolveAnchor(&editing.Anchor); ok {
 			e.first, e.last = first, last
@@ -260,12 +271,36 @@ func (s *Session) editorKeysLocked(chunk []byte) {
 
 func (s *Session) commitEditorLocked() {
 	e := s.editor
-	s.editor = nil
 	text := strings.TrimSpace(string(e.text))
+	// On a card that takes attachments, a line that names one attaches it
+	// and the field stays open for the next line.
+	if e.takesAttachments() {
+		if a, ok := attach.Parse(text); ok {
+			a = attach.Capture(a, s.cwd)
+			e.attached = append(e.attached, a)
+			e.text, e.note = nil, attachNote(a)
+			return
+		}
+	}
+	s.editor = nil
 	if e.editing != nil {
 		e.editing.Text = text
-		e.editing.Tag = e.tag
+		if e.editing.Kind == card.Note {
+			e.editing.Tag = e.tag
+		}
+		e.editing.Attachments = e.attached
 		s.focus = focusTray
+		_ = s.saveLocked()
+		return
+	}
+	if e.kind != "" && e.kind != card.Note {
+		if text == "" && len(e.attached) == 0 {
+			s.focus = focusTray
+			return
+		}
+		s.Tray.Add(&card.Card{Kind: e.kind, Text: text, Attachments: e.attached})
+		s.focus = focusTray
+		s.clampTraySel()
 		_ = s.saveLocked()
 		return
 	}
@@ -283,6 +318,25 @@ func (s *Session) commitEditorLocked() {
 	s.Tray.Add(c)
 	s.focus = focusAgent
 	_ = s.saveLocked()
+}
+
+// takesAttachments reports whether the card being edited may carry them.
+func (e *editor) takesAttachments() bool {
+	if e.editing != nil {
+		return e.editing.Kind == card.Instruction
+	}
+	return e.kind == card.Instruction
+}
+
+// attachNote is the one-line confirmation shown under the field.
+func attachNote(a card.Attachment) string {
+	if a.Kind == card.PathAttachment {
+		return "attached @" + a.Spec
+	}
+	if a.Status != 0 {
+		return "attached " + a.Spec + " (exit " + strconv.Itoa(a.Status) + ")"
+	}
+	return "attached " + a.Spec
 }
 
 // resolveAnchor finds the rows an anchor occupies now: through the current

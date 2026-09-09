@@ -24,8 +24,11 @@ palette; the agent's output is never repainted with different attributes.
   blocks and lines, diff lines, table rows, tool calls.
 - `internal/align` — matching a turn's blocks to rendered rows by letters and
   digits only, in order, tolerant of wrapping and decoration.
-- `internal/card` — cards, anchors, the tray, and its per-session persistence
-  under the user's state directory.
+- `internal/card` — cards of every kind, anchors, attachments, the tray, and
+  its per-session persistence and stash slot under the user's state directory.
+- `internal/attach` — what an instruction card's attachment refers to: a path
+  is only a reference, a command is run once and its output travels with the
+  card.
 
 ## Pass-through and composited
 
@@ -47,6 +50,20 @@ tracking, the agent viewport is the history). Claude Code's `tui: fullscreen`
 setting selects the latter. Every adapter reports the mode from the screen
 model, and alignment runs against whichever history the mode provides.
 
+## Cards and the tray
+
+A note is anchored in the agent's output; a question and an instruction are
+free text; an overall card is a tray's one closing remark and always holds the
+last place, so nothing reorders past it and a second one edits the first.
+`Alt+N`, or `+` with the tray focused, offers the free kinds on the same
+overlay row the block toolbar uses, and the same one-line editor writes them.
+While an instruction card is being written, a line that reads `@path` or
+`!command` becomes an attachment instead of the card's text and the field
+stays open: a path is compiled as a reference, and a command is run once, then,
+and what it printed travels with the card. `diple stash` sets an agent's saved
+tray aside in one slot and `diple unstash` gives it to that agent's next
+session.
+
 ## Turn navigation and search
 
 `[` and `]` move the history view between assistant turns and `/` opens a
@@ -65,7 +82,9 @@ conversation aligns the turns it shows and leaves the rest without rows.
 ## Rules
 
 - One static binary, no runtime dependencies. Go modules compile in; nothing is
-  fetched or spawned at run time except the wrapped agent.
+  fetched or spawned at run time except the wrapped agent and a command the
+  user explicitly attaches to an instruction card, which runs once, in the
+  session's directory, under a timeout and an output cap.
 - Fail open: any failure of Diple's own logic degrades to plain pass-through and
   never leaves the host terminal in raw mode.
 - Forward the agent's bytes unmodified while live. Diple's only additions to the

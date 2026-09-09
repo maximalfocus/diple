@@ -19,6 +19,8 @@ func (s *Session) trayKeysLocked(chunk []byte) {
 		return
 	}
 	switch chunk[0] {
+	case '+':
+		s.chooser = true
 	case 0x1b, '\t':
 		s.focus = focusAgent
 	case 'j':
@@ -53,6 +55,19 @@ func (s *Session) trayKeysLocked(chunk []byte) {
 		s.setKeyErr(s.requestSendLocked(false))
 	}
 	s.clampTraySel()
+}
+
+// openFreeEditorLocked opens the one-line editor for a new free card, or
+// for the tray's existing overall card, since a tray carries only one.
+func (s *Session) openFreeEditorLocked(k card.Kind) {
+	if k == card.Overall {
+		if existing := s.Tray.Overall(); existing != nil {
+			s.openEditorLocked("", nil, existing)
+			return
+		}
+	}
+	s.editor = &editor{kind: k, first: -1, last: -1}
+	s.sel = nil
 }
 
 // setKeyErr keeps the first error raised while handling a consumed key, for

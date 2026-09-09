@@ -77,3 +77,79 @@ func TestQuoteAndTags(t *testing.T) {
 		t.Fatal("tag colours")
 	}
 }
+
+func TestOverallCardIsSingleAndStaysLast(t *testing.T) {
+	tr := &Tray{}
+	tr.Add(&Card{Kind: Note, Tag: "fix", Text: "a"})
+	o := tr.Add(&Card{Kind: Overall, Text: "keep it small"})
+	q := tr.Add(&Card{Kind: Question, Text: "which ports?"})
+	if tr.Len() != 3 || tr.Cards[1] != q || tr.Cards[2] != o {
+		t.Fatalf("a later card must go before the overall: %v", texts(tr))
+	}
+	// A second overall updates the one the tray has.
+	again := tr.Add(&Card{Kind: Overall, Text: "and rebase"})
+	if again != o || tr.Len() != 3 || tr.Overall().Text != "and rebase" {
+		t.Fatalf("second overall: len=%d overall=%+v", tr.Len(), tr.Overall())
+	}
+	// Nothing moves onto or past the last place.
+	if tr.Move(2, 0) || tr.Move(0, 2) {
+		t.Fatalf("the overall card holds the last place: %v", texts(tr))
+	}
+	if !tr.Move(1, 0) || tr.Cards[0] != q {
+		t.Fatalf("ordinary moves still work: %v", texts(tr))
+	}
+}
+
+func texts(t *Tray) []string {
+	var out []string
+	for _, c := range t.Cards {
+		out = append(out, string(c.Kind)+":"+c.Text)
+	}
+	return out
+}
+
+func TestStashSetsATrayAsideAndUnstashGivesItBack(t *testing.T) {
+	s := &Store{Dir: t.TempDir() + "/trays"}
+	tr := &Tray{}
+	tr.Add(&Card{Kind: Note, Tag: "fix", Text: "note", Anchor: Anchor{Turn: 2, Quote: "q"}})
+	tr.Add(&Card{Kind: Instruction, Text: "rebase", Attachments: []Attachment{
+		{Kind: PathAttachment, Spec: "src/auth.ts"},
+		{Kind: CommandAttachment, Spec: "git diff --stat", Output: "one line", Status: 0},
+	}})
+	tr.Add(&Card{Kind: Overall, Text: "keep it small"})
+	if err := s.Save("claude", "sess-1", tr); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.Stash("claude")
+	if err != nil || n != 3 {
+		t.Fatalf("stash: n=%d err=%v", n, err)
+	}
+	empty, err := s.Load("claude", "sess-1")
+	if err != nil || empty.Len() != 0 {
+		t.Fatalf("the stashed session tray is empty: len=%d err=%v", empty.Len(), err)
+	}
+	if n, err := s.Unstash("claude"); err != nil || n != 3 {
+		t.Fatalf("unstash: n=%d err=%v", n, err)
+	}
+	// The next session of that agent takes the tray over, whatever its id.
+	got, err := s.Load("claude", "sess-2")
+	if err != nil || got.Len() != 3 {
+		t.Fatalf("restored: len=%d err=%v", got.Len(), err)
+	}
+	if got.Cards[0].Text != "note" || got.Cards[0].Anchor.Quote != "q" ||
+		got.Cards[1].Kind != Instruction || len(got.Cards[1].Attachments) != 2 ||
+		got.Cards[1].Attachments[1].Output != "one line" || got.Overall() != got.Cards[2] {
+		t.Fatalf("restored tray differs: %+v", got.Cards)
+	}
+	// Once the session has saved it, the queue is spent.
+	if err := s.Save("claude", "sess-2", got); err != nil {
+		t.Fatal(err)
+	}
+	third, err := s.Load("claude", "sess-3")
+	if err != nil || third.Len() != 0 {
+		t.Fatalf("queue not cleared: len=%d err=%v", third.Len(), err)
+	}
+	if n, err := s.Stash("claude"); err != nil || n != 3 {
+		t.Fatalf("restash: n=%d err=%v", n, err)
+	}
+}

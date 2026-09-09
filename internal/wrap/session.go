@@ -9,6 +9,7 @@ import (
 	"io"
 	"strconv"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/maximalfocus/diple/internal/adapter"
 	"github.com/maximalfocus/diple/internal/card"
@@ -62,7 +63,10 @@ type Session struct {
 	adapter   adapter.Adapter
 	agentName string
 	sessionID string
-	store     *card.Store
+	// cwd is the session's working directory, where a command attachment
+	// runs and where the archive lives.
+	cwd   string
+	store *card.Store
 	// Tray is the session's cards.
 	Tray *card.Tray
 	// Plain restricts Diple's drawing to reverse and underline.
@@ -85,6 +89,7 @@ type Session struct {
 	trayH      int
 	sel        *selection
 	editor     *editor
+	chooser    bool // the free-card kind chooser is showing
 	search     *searchField
 	nav        *navRequest
 	focus      focusKind
@@ -132,6 +137,13 @@ func (s *Session) UseStore(st *card.Store) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.store = st
+}
+
+// UseDir records the session's working directory.
+func (s *Session) UseDir(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cwd = dir
 }
 
 // UseArchive attaches the sent-fold archive.
@@ -332,6 +344,14 @@ func (s *Session) HandleInput(p []byte) error {
 			p = p[i:]
 			continue
 		}
+		// Alt+N opens the free-card chooser whether or not the tray has
+		// cards, which is the only way to write the first one.
+		if s.editor == nil && s.search == nil && len(p) >= 2 && p[0] == 0x1b && p[1] == 'n' {
+			p = p[2:]
+			s.chooser = true
+			s.sel = nil
+			continue
+		}
 		if s.editor == nil && s.search == nil && s.Tray.Len() > 0 && len(p) >= 2 && p[0] == 0x1b {
 			if p[1] == '\r' || p[1] == '\n' {
 				p = p[2:]
@@ -405,6 +425,19 @@ func (s *Session) keysLocked(forward, chunk []byte) []byte {
 	}
 	if s.search != nil {
 		s.setKeyErr(s.searchKeysLocked(chunk))
+		return forward
+	}
+	// The kind chooser takes one key, whatever has focus; anything typed
+	// behind it in the same chunk goes on to the editor it opened.
+	if s.chooser {
+		s.chooser = false
+		r, size := utf8.DecodeRune(chunk)
+		if k := card.KindByLetter(r); k != "" {
+			s.openFreeEditorLocked(k)
+		}
+		if len(chunk) > size {
+			return s.keysLocked(forward, chunk[size:])
+		}
 		return forward
 	}
 	// Any other key ends a jump the agent has not finished scrolling.

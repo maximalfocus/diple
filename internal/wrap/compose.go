@@ -10,7 +10,7 @@ import (
 // ownsScreen reports whether anything of Diple's is showing, which is when
 // the session must composite instead of passing bytes through.
 func (s *Session) ownsScreen() bool {
-	return s.Tray.Len() > 0 || s.sel != nil || s.editor != nil || s.search != nil || s.highlight != nil
+	return s.Tray.Len() > 0 || s.sel != nil || s.editor != nil || s.search != nil || s.chooser || s.highlight != nil
 }
 
 // trayHeight is the divider plus one row per card, capped at a third of
@@ -172,9 +172,9 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 			}
 		}
 	}
-	// Toolbar, editor, or search overlay row.
+	// Toolbar, editor, search, or kind-chooser overlay row.
 	overlayRow := -1
-	if s.sel != nil || s.editor != nil || s.search != nil {
+	if s.sel != nil || s.editor != nil || s.search != nil || s.chooser {
 		overlayRow = s.overlayRowLocked(agentRows)
 		if overlayRow >= 0 && overlayRow < len(base) {
 			switch {
@@ -182,6 +182,8 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 				base[overlayRow] = s.editorLine()
 			case s.search != nil:
 				base[overlayRow] = s.searchLine()
+			case s.chooser:
+				base[overlayRow] = s.chooserLine()
 			default:
 				base[overlayRow] = s.toolbarLine()
 			}
@@ -349,11 +351,18 @@ func (s *Session) cardLine(i int) screen.Line {
 	c := s.Tray.Cards[i]
 	l := s.blankLine()
 	x := putText(&l, 1, strconv.Itoa(i+1)+" ", s.dimAttr())
-	x = putText(&l, x, "["+string(c.Tag)+"] ", s.tagAttr(c.Tag))
+	label := string(c.Tag)
+	if c.Kind != card.Note {
+		label = string(c.Kind)
+	}
+	x = putText(&l, x, "["+label+"] ", s.tagAttr(c.Tag))
 	if c.Anchor.Quote != "" {
 		x = putText(&l, x, "“"+c.Anchor.Quote+"” ", s.dimAttr())
 	}
-	putText(&l, x, c.Text, screen.Attr{})
+	x = putText(&l, x, c.Text, screen.Attr{})
+	if n := len(c.Attachments); n > 0 {
+		putText(&l, x+1, "("+strconv.Itoa(n)+" attached)", s.dimAttr())
+	}
 	if s.focus == focusTray && i == s.traySel {
 		reverseRow(&l)
 	}
@@ -378,12 +387,40 @@ func mergeAttr(a, b screen.Attr) screen.Attr {
 	return a
 }
 
-// editorLine renders the inline editor: the tag, then the note text.
+// editorLine renders the inline editor: what is being written — a note's
+// tag or a free card's kind — then the text, and any transient note such as
+// a capture that just happened.
 func (s *Session) editorLine() screen.Line {
 	l := s.blankLine()
 	x := putText(&l, 1, "› ", s.dimAttr())
-	x = putText(&l, x, string(s.editor.tag)+": ", s.tagAttr(s.editor.tag))
-	putText(&l, x, string(s.editor.text), screen.Attr{})
+	x = putText(&l, x, s.editorLabel()+": ", s.tagAttr(s.editor.tag))
+	x = putText(&l, x, string(s.editor.text), screen.Attr{})
+	if n := s.editor.note; n != "" {
+		putText(&l, x+2, n, s.dimAttr())
+	}
+	return l
+}
+
+// editorLabel is the tag of a note or the kind of a free card.
+func (s *Session) editorLabel() string {
+	if e := s.editor; e.tag != "" {
+		return string(e.tag)
+	} else if e.kind != "" {
+		return string(e.kind)
+	}
+	return "note"
+}
+
+// chooserLine offers the free card kinds, in the toolbar's own shape.
+func (s *Session) chooserLine() screen.Line {
+	l := s.blankLine()
+	x := putText(&l, 1, "› ", s.dimAttr())
+	for _, k := range card.FreeKinds {
+		name := string(k)
+		x = putText(&l, x, name[:1], s.boldAttr())
+		x = putText(&l, x, name[1:]+"  ", screen.Attr{})
+	}
+	putText(&l, x, "esc", s.dimAttr())
 	return l
 }
 
@@ -411,7 +448,7 @@ func (s *Session) searchCursorCol() int {
 }
 
 func (s *Session) editorCursorCol() int {
-	x := 1 + 2 + len(string(s.editor.tag)) + 2
+	x := 1 + 2 + len(s.editorLabel()) + 2
 	for _, r := range s.editor.text {
 		x += runeWidth(r)
 	}
@@ -425,9 +462,9 @@ func (s *Session) editorCursorCol() int {
 // directly under the selection, else directly above it, else the region's
 // last row.
 func (s *Session) overlayRowLocked(agentRows int) int {
-	// The search field is not tied to a block, so it sits at the foot of the
-	// agent region.
-	if s.search != nil {
+	// The search field and the kind chooser are not tied to a block, so they
+	// sit at the foot of the agent region.
+	if s.search != nil || s.chooser {
 		return agentRows - 1
 	}
 	last, first := -1, -1
