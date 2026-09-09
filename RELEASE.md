@@ -42,31 +42,27 @@ version it ran against as R-012 does for an adapter's CLI.
 
 | Host | Class | Result | Version | Machine |
 |---|---|---|---|---|
-| WezTerm | driven | pass, gesture | 20240203-110809-5046fc22 | Linux amd64 |
+| WezTerm | driven | pass, gesture | 20240203-110809-5046fc22 | macOS 26.6 arm64; Linux amd64 |
+| kitty | driven | pass, gesture | 0.48.2 | macOS 26.6 arm64 |
 | kitty | driven | pass, gesture | 0.45.0 | Linux amd64 |
+| `tmux` | driven | pass, gesture | 3.7c | macOS 26.6 arm64 |
 | `tmux` | driven | pass, gesture | 3.6 | Linux amd64 |
+| `herdr` | driven | pass, gesture | 0.7.4 | macOS 26.6 arm64 |
 | `herdr` | driven | pass, gesture | 0.8.2 | Linux amd64 |
+| Ghostty | pass-through | pass | 1.3.1 | macOS 26.6 arm64 |
 | Ghostty | pass-through | pass | 1.3.0 | Linux amd64 |
-| Terminal.app | pass-through | re-run needed | — | macOS arm64 |
-| iTerm2 | pass-through | pending | — | macOS arm64 |
+| Terminal.app | pass-through | pass | 2.15 | macOS 26.6 arm64 |
+| iTerm2 | pass-through | pass | 3.7.0 | macOS 26.6 arm64 |
 
-Ghostty needs no first launch on Linux, where it takes `-e` on PATH rather than
-from inside a bundle; its Linux capture is what R-014 asks of a pass-through
-host, and it is the same check the macOS bundle would produce.
-
-Terminal.app passed an earlier run whose captures were machine-specific and
-whose host version was not recorded, so under R-014 it needs one re-run to name
-its version: `scripts/verify-hosts.sh terminal.app`, which drives nothing and
-needs nobody at the display.
-
-iTerm2 is installed on the macOS machine but has never been opened by a person
-there, and it sits behind a first-run window until one does. Once it has been
-opened once, its row is one command: `scripts/verify-hosts.sh iterm2`.
+All seven hosts were recorded on macOS arm64 in both drawing modes, and the
+five that exist on Linux were recorded there too. `herdr` was verified against
+both of its control APIs: 0.7 through `agent start` and `agent send`, 0.8
+through `tab create`, `pane run`, and `pane send-text`. The check looks for a
+macOS app bundle in `/Applications` and then in `~/Applications`, which is
+where Homebrew puts a cask when `/Applications` is not writable by the user.
 
 ## Left for the release itself
 
-- [ ] The iTerm2 capture, after its first launch, and the Terminal.app re-run
-      that records its version.
 - [ ] Register `getdiple.sh`.
 - [ ] Cut the release, fill the formula's URLs and checksums, publish the tap.
 - [ ] Make the repository public. This is a separate, explicitly invoked step —

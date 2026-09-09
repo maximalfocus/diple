@@ -36,6 +36,20 @@ wrapped() { printf '%s --record %s %s %s' "$diple" "$(capture_for "$1")" "$plain
 # question card, and let the tray draw.
 gesture=$'\033nqhello from the host check\r'
 
+# app_bundle prints the path of a macOS app bundle, looking in /Applications
+# and then in ~/Applications, where Homebrew puts a cask when /Applications is
+# not writable by the user running it.
+app_bundle() {
+	local name="$1" dir
+	for dir in /Applications "$HOME/Applications"; do
+		if [ -d "$dir/$name" ]; then
+			printf '%s\n' "$dir/$name"
+			return 0
+		fi
+	done
+	return 1
+}
+
 # host_version names the version a host was verified at, which R-014 records
 # for the same reason R-012 records an adapter's CLI version: a host's control
 # interface changes between releases, and a run that does not name the version
@@ -47,12 +61,12 @@ host_version() {
 	wezterm) wezterm --version 2>/dev/null | awk '{print $2}' ;;
 	herdr) herdr --version 2>/dev/null | awk '{print $2}' ;;
 	ghostty)
-		if [ -x /Applications/Ghostty.app/Contents/MacOS/ghostty ]; then
-			/Applications/Ghostty.app/Contents/MacOS/ghostty --version 2>/dev/null | head -1 | awk '{print $2}'
+		if bundle="$(app_bundle Ghostty.app)"; then
+			"$bundle/Contents/MacOS/ghostty" --version 2>/dev/null | head -1 | awk '{print $2}'
 		else
 			ghostty --version 2>/dev/null | head -1 | awk '{print $2}'
 		fi ;;
-	iterm2) defaults read /Applications/iTerm.app/Contents/Info CFBundleShortVersionString 2>/dev/null ;;
+	iterm2) defaults read "$(app_bundle iTerm.app)/Contents/Info" CFBundleShortVersionString 2>/dev/null ;;
 	terminal.app) defaults read /System/Applications/Utilities/Terminal.app/Contents/Info CFBundleShortVersionString 2>/dev/null ;;
 	esac
 }
@@ -71,7 +85,7 @@ wait_for_capture() {
 # the gesture was handed to it; 3 when the host is not installed; 4 when it is
 # installed but could not be started or driven.
 start_host() {
-	local host="$1" cmd launcher pane
+	local host="$1" cmd launcher pane bundle
 	cmd="$(wrapped "$host")"
 	rm -f "$(capture_for "$host")"
 	# A launcher script, so a host that only knows how to open a file can
@@ -133,8 +147,8 @@ start_host() {
 		# so R-014 classes it pass-through only and its capture covers
 		# forwarding, the envelope, and restore. It ships its command inside
 		# the bundle on macOS and on PATH on Linux.
-		if [ -x /Applications/Ghostty.app/Contents/MacOS/ghostty ]; then
-			/Applications/Ghostty.app/Contents/MacOS/ghostty -e "$launcher" >/dev/null 2>&1 &
+		if bundle="$(app_bundle Ghostty.app)"; then
+			"$bundle/Contents/MacOS/ghostty" -e "$launcher" >/dev/null 2>&1 &
 		elif command -v ghostty >/dev/null; then
 			ghostty -e "$launcher" >/dev/null 2>&1 &
 		else
@@ -145,8 +159,8 @@ start_host() {
 	iterm2)
 		# `open -a` runs a script in a terminal without asking for the
 		# automation permission an AppleScript would need.
-		[ -d /Applications/iTerm.app ] || return 3
-		open -a /Applications/iTerm.app "$launcher" >/dev/null 2>&1 || return 4
+		bundle="$(app_bundle iTerm.app)" || return 3
+		open -a "$bundle" "$launcher" >/dev/null 2>&1 || return 4
 		sleep 4
 		;;
 	terminal.app)
