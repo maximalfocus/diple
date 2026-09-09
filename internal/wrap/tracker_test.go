@@ -44,74 +44,103 @@ func (f *fileAdapter) Mode(*screen.Screen) adapter.Mode                         
 func (f *fileAdapter) Align(*adapter.Transcript, []string) []adapter.TurnAlignment { return nil }
 func (f *fileAdapter) Fallback([]string) []adapter.TurnAlignment                   { return nil }
 
-func waitUntil(t *testing.T, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("condition not met in time")
+func (f *fileAdapter) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.parses
 }
 
-func TestTrackerDiscoversAndRefreshes(t *testing.T) {
+// writeAt writes p and gives it a distinct modification time, so a change
+// is visible even on filesystems with coarse timestamps.
+func writeAt(t *testing.T, p string, data string, at time.Time) {
+	t.Helper()
+	if err := os.WriteFile(p, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(p, at, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTrackerTickDiscoversRefreshesAndKeepsLastGood(t *testing.T) {
 	cwd := t.TempDir()
 	fa := &fileAdapter{}
 	var found []string
-	var mu sync.Mutex
-	tr := NewTracker(fa, cwd, func(id string) { mu.Lock(); found = append(found, id); mu.Unlock() })
-	tr.poll = 20 * time.Millisecond
-	tr.Start()
-	defer tr.Stop()
+	tr := NewTracker(fa, cwd, func(id string) { found = append(found, id) })
 
-	time.Sleep(60 * time.Millisecond)
-	if tr.Path() != "" {
-		t.Fatal("discovered before the file existed")
+	// Nothing to discover yet.
+	tr.tick()
+	if tr.Path() != "" || fa.count() != 0 {
+		t.Fatalf("discovered before the file existed: path %q parses %d", tr.Path(), fa.count())
 	}
+
+	// The file appears: discovered and parsed once, onFound called once.
 	p := filepath.Join(cwd, "transcript.txt")
-	if err := os.WriteFile(p, []byte("hello"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	waitUntil(t, func() bool { tx, _ := tr.Transcript(); return tx != nil })
+	base := time.Now().Add(-time.Minute)
+	writeAt(t, p, "hello", base)
+	tr.tick()
 	tx, err := tr.Transcript()
-	if err != nil || tx.Turns[0].Blocks[0].Text != "hello" || tr.Path() != p {
-		t.Fatalf("transcript = %+v err = %v path = %q", tx, err, tr.Path())
+	if err != nil || tx == nil || tx.Turns[0].Blocks[0].Text != "hello" || tr.Path() != p || fa.count() != 1 {
+		t.Fatalf("after discovery: transcript %+v err %v path %q parses %d", tx, err, tr.Path(), fa.count())
 	}
-	mu.Lock()
 	if len(found) != 1 || found[0] != "sid" {
 		t.Fatalf("onFound = %v", found)
 	}
-	mu.Unlock()
 
-	// A change re-parses; an unchanged file does not.
-	fa.mu.Lock()
-	before := fa.parses
-	fa.mu.Unlock()
-	time.Sleep(60 * time.Millisecond)
-	fa.mu.Lock()
-	if fa.parses != before {
-		t.Fatalf("re-parsed an unchanged file: %d -> %d", before, fa.parses)
+	// An unchanged file is not parsed again.
+	tr.tick()
+	tr.tick()
+	if fa.count() != 1 {
+		t.Fatalf("re-parsed an unchanged file: %d", fa.count())
 	}
-	fa.mu.Unlock()
-	if err := os.WriteFile(p, []byte("hello again"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	future := time.Now().Add(2 * time.Second)
-	_ = os.Chtimes(p, future, future)
-	waitUntil(t, func() bool { tx, _ := tr.Transcript(); return tx != nil && tx.Turns[0].Blocks[0].Text == "hello again" })
 
-	// A version error is surfaced and the last good transcript is kept.
-	if err := os.WriteFile(p, []byte("bad"), 0o600); err != nil {
-		t.Fatal(err)
+	// A change is picked up.
+	writeAt(t, p, "hello again", base.Add(time.Second))
+	tr.tick()
+	tx, err = tr.Transcript()
+	if err != nil || tx.Turns[0].Blocks[0].Text != "hello again" || fa.count() != 2 {
+		t.Fatalf("after change: transcript %+v err %v parses %d", tx, err, fa.count())
 	}
-	later := time.Now().Add(4 * time.Second)
-	_ = os.Chtimes(p, later, later)
-	waitUntil(t, func() bool { _, err := tr.Transcript(); return err != nil })
+	if len(found) != 1 {
+		t.Fatalf("onFound called again: %v", found)
+	}
+
+	// A version the adapter refuses is surfaced; the last good transcript stays.
+	writeAt(t, p, "bad", base.Add(2*time.Second))
+	tr.tick()
 	tx, err = tr.Transcript()
 	var ve *adapter.VersionError
-	if !errors.As(err, &ve) || tx == nil {
-		t.Fatalf("transcript = %v err = %v", tx, err)
+	if !errors.As(err, &ve) || tx == nil || tx.Turns[0].Blocks[0].Text != "hello again" {
+		t.Fatalf("after bad version: transcript %+v err %v", tx, err)
 	}
+}
+
+func TestTrackerLoopRunsAndStops(t *testing.T) {
+	cwd := t.TempDir()
+	fa := &fileAdapter{}
+	var mu sync.Mutex
+	var found []string
+	tr := NewTracker(fa, cwd, func(id string) { mu.Lock(); found = append(found, id); mu.Unlock() })
+	tr.poll = 10 * time.Millisecond
+	writeAt(t, filepath.Join(cwd, "transcript.txt"), "hello", time.Now().Add(-time.Minute))
+	tr.Start()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if tx, _ := tr.Transcript(); tx != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	tr.Stop()
+	tx, err := tr.Transcript()
+	if err != nil || tx == nil || tx.Turns[0].Blocks[0].Text != "hello" {
+		t.Fatalf("loop did not discover: %+v %v", tx, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(found) != 1 {
+		t.Fatalf("onFound = %v", found)
+	}
+	// Stop is idempotent.
+	tr.Stop()
 }
