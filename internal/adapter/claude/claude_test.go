@@ -1,0 +1,267 @@
+package claude
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/maximalfocus/diple/internal/adapter"
+	"github.com/maximalfocus/diple/internal/blocks"
+	"github.com/maximalfocus/diple/internal/record"
+	"github.com/maximalfocus/diple/internal/screen"
+)
+
+const fixtureVersion = "2.1.266"
+
+// loadFixture replays a recorded session into a screen model and returns
+// the rows the mode provides as history: scrollback plus screen inline, the
+// visible screen in fullscreen.
+func loadFixture(t *testing.T, mode string) (*screen.Screen, []string, *adapter.Transcript) {
+	t.Helper()
+	dir := filepath.Join("testdata", fixtureVersion)
+	rec, err := record.Open(filepath.Join(dir, mode+".recording.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := screen.New(rec.Header.Cols, rec.Header.Rows)
+	if err := rec.Replay(s); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(filepath.Join(dir, mode+".transcript.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	tr, err := (&Adapter{}).Parse(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, historyRows(s), tr
+}
+
+func historyRows(s *screen.Screen) []string {
+	var rows []string
+	if !s.AltActive() {
+		for _, l := range s.History() {
+			rows = append(rows, l.String())
+		}
+	}
+	return append(rows, s.Text()...)
+}
+
+type expectation struct {
+	kind        blocks.Kind
+	text        string
+	first, last int
+}
+
+// The expected rows were read off the replayed fixtures by hand: in inline
+// mode the turn sits below the echoed prompt in scrollback, in fullscreen
+// mode it sits on the alternate screen.
+func expected(offset int) []expectation {
+	return []expectation{
+		{blocks.Heading, "Plan", 0, 0},
+		{blocks.ListItem, "Read the config file and note the two ports that the service listens on for HTTP and metrics", 2, 3},
+		{blocks.ListItem, "Change the handler", 4, 4},
+		{blocks.ListItem, "keep the old route", 5, 5},
+		{blocks.ListItem, "add a fallback that logs and returns 404", 6, 6},
+		{blocks.ListItem, "Verify", 7, 7},
+		{blocks.CodeBlock, "", 8, 10},
+		{blocks.CodeLine, "func handle(w http.ResponseWriter, r *http.Request) {", 8, 8},
+		{blocks.CodeLine, "    w.WriteHeader(404)", 9, 9},
+		{blocks.CodeLine, "}", 10, 10},
+		{blocks.CodeBlock, "", 11, 12},
+		{blocks.DiffLine, "-    return nil", 11, 11},
+		{blocks.DiffLine, "+    return errors.New(\"boom\")", 12, 12},
+		{blocks.Paragraph, "That is the whole plan.", 13, 13},
+	}
+}
+
+func TestFixturesAlignInBothModes(t *testing.T) {
+	cases := []struct {
+		mode   string
+		want   adapter.Mode
+		offset int
+	}{
+		{"inline", adapter.ModeInline, 21},
+		{"fullscreen", adapter.ModeFullscreen, 3},
+	}
+	a := &Adapter{}
+	for _, c := range cases {
+		t.Run(c.mode, func(t *testing.T) {
+			s, rows, tr := loadFixture(t, c.mode)
+			if tr.Version != fixtureVersion || len(tr.Turns) != 1 {
+				t.Fatalf("transcript version %q turns %d", tr.Version, len(tr.Turns))
+			}
+			if got := a.Mode(s); got != c.want {
+				t.Fatalf("mode = %s, want %s", got, c.want)
+			}
+			al := a.Align(tr, rows)
+			if len(al) != 1 || !al[0].Aligned {
+				t.Fatalf("alignment = %+v", al)
+			}
+			want := expected(c.offset)
+			if len(al[0].Blocks) != len(want) {
+				for _, b := range al[0].Blocks {
+					t.Logf("%s %q %d-%d", b.Kind, b.Text, b.First, b.Last)
+				}
+				t.Fatalf("%d blocks, want %d", len(al[0].Blocks), len(want))
+			}
+			for i, w := range want {
+				got := al[0].Blocks[i]
+				if got.Kind != w.kind || (w.text != "" && got.Text != w.text) {
+					t.Fatalf("block %d = %s %q, want %s %q", i, got.Kind, got.Text, w.kind, w.text)
+				}
+				if got.First != w.first+c.offset || got.Last != w.last+c.offset {
+					t.Fatalf("block %d (%s %q) rows %d-%d, want %d-%d", i, got.Kind, got.Text, got.First, got.Last, w.first+c.offset, w.last+c.offset)
+				}
+				// The rows really carry the block's text.
+				if got.Kind != blocks.CodeBlock && !strings.Contains(joinRows(rows, got.First, got.Last), firstWord(got.Text)) {
+					t.Fatalf("block %d rows %q do not contain %q", i, joinRows(rows, got.First, got.Last), firstWord(got.Text))
+				}
+			}
+		})
+	}
+}
+
+func joinRows(rows []string, first, last int) string {
+	return strings.Join(rows[first:last+1], "\n")
+}
+
+func firstWord(s string) string {
+	if f := strings.Fields(strings.Trim(s, "-+ ")); len(f) > 0 {
+		return strings.Trim(f[0], "(){}\"")
+	}
+	return s
+}
+
+func TestCorruptTranscriptFallsBackToParagraphs(t *testing.T) {
+	a := &Adapter{}
+	s, rows, tr := loadFixture(t, "inline")
+	_ = s
+	// The transcript parses but says something else than the screen shows.
+	tr.Turns[0].Blocks = blocks.Parse("Something the screen never showed.")
+	al := a.Align(tr, rows)
+	if len(al) != 1 || al[0].Aligned {
+		t.Fatalf("alignment = %+v", al)
+	}
+	if len(al[0].Blocks) < 3 || al[0].Blocks[0].Kind != blocks.Paragraph || al[0].Blocks[0].First != 21 {
+		t.Fatalf("fallback blocks = %+v", al[0].Blocks)
+	}
+	if al[0].Blocks[0].Text != "Plan" {
+		t.Fatalf("first fallback paragraph = %q", al[0].Blocks[0].Text)
+	}
+	// The file itself is unreadable: no transcript at all still yields paragraphs.
+	if _, err := a.Parse(strings.NewReader("{not json\n")); err == nil {
+		t.Fatal("garbage should not parse")
+	}
+	fb := a.Fallback(rows)
+	if len(fb) != 1 || fb[0].Aligned || len(fb[0].Blocks) < 3 || fb[0].Blocks[0].First != 21 {
+		t.Fatalf("fallback = %+v", fb)
+	}
+	last := fb[0].Blocks[len(fb[0].Blocks)-1]
+	if last.Last >= 38 { // the region ends at the prompt marker row
+		t.Fatalf("fallback ran into the prompt: %+v", last)
+	}
+}
+
+func TestOtherVersionFailsLoudly(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", fixtureVersion, "inline.transcript.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := strings.ReplaceAll(string(data), fixtureVersion, "9.9.9")
+	_, err = (&Adapter{}).Parse(strings.NewReader(other))
+	var ve *adapter.VersionError
+	if !errors.As(err, &ve) || ve.Version != "9.9.9" || !strings.Contains(err.Error(), "9.9.9") || !strings.Contains(err.Error(), fixtureVersion) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestParseGroupsByMessageAndSummarisesTools(t *testing.T) {
+	transcript := strings.Join([]string{
+		`{"type":"user","version":"2.1.266","sessionId":"s1","message":{"role":"user","content":"hi"}}`,
+		`{"type":"assistant","version":"2.1.266","sessionId":"s1","message":{"id":"m1","role":"assistant","content":[{"type":"thinking","thinking":"..."},{"type":"text","text":"First.\n\nSecond."}]}}`,
+		`{"type":"assistant","version":"2.1.266","sessionId":"s1","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"ls -la\n# more","description":"list"}}]}}`,
+		`{"type":"assistant","version":"2.1.266","sessionId":"s1","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Done."}]}}`,
+	}, "\n")
+	tr, err := (&Adapter{}).Parse(strings.NewReader(transcript))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.SessionID != "s1" || len(tr.Turns) != 2 {
+		t.Fatalf("transcript = %+v", tr)
+	}
+	b := tr.Turns[0].Blocks
+	if len(b) != 3 || b[2].Kind != blocks.ToolCall || b[2].Text != "Bash(ls -la)" {
+		t.Fatalf("turn 1 blocks = %+v", b)
+	}
+	if tr.Turns[1].Ordinal != 2 || tr.Turns[1].Blocks[0].Text != "Done." {
+		t.Fatalf("turn 2 = %+v", tr.Turns[1])
+	}
+}
+
+func TestProjectDirEncoding(t *testing.T) {
+	got := ProjectDir("/home/u", "/private/tmp/diple-fixture")
+	if got != filepath.Join("/home/u", ".claude", "projects", "-private-tmp-diple-fixture") {
+		t.Fatalf("ProjectDir = %q", got)
+	}
+	if got := filepath.Base(ProjectDir("/h", "/a/.b_c d")); got != "-a--b-c-d" {
+		t.Fatalf("encoded = %q", got)
+	}
+}
+
+func TestDiscover(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	a := &Adapter{Home: home}
+	start := time.Now()
+	if _, err := a.Discover(cwd, start); !errors.Is(err, adapter.ErrNoTranscript) {
+		t.Fatalf("err = %v, want ErrNoTranscript", err)
+	}
+	real, _ := filepath.EvalSymlinks(cwd)
+	dir := ProjectDir(home, real)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stamp := func(at time.Time) []byte {
+		return []byte(`{"type":"mode"}` + "\n" + `{"type":"user","timestamp":"` + at.UTC().Format(time.RFC3339Nano) + `"}` + "\n")
+	}
+	old := filepath.Join(dir, "old.jsonl")
+	if err := os.WriteFile(old, stamp(start.Add(-time.Hour)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale := start.Add(-time.Hour)
+	if err := os.Chtimes(old, stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Discover(cwd, start); !errors.Is(err, adapter.ErrNoTranscript) {
+		t.Fatalf("stale transcript must not be discovered: %v", err)
+	}
+	// An earlier session's file touched after this session started is still
+	// not this session's transcript: its first entry predates the start.
+	if err := os.Chtimes(old, time.Now(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Discover(cwd, start); !errors.Is(err, adapter.ErrNoTranscript) {
+		t.Fatalf("earlier session's transcript must not be discovered: %v", err)
+	}
+	fresh := filepath.Join(dir, "fresh.jsonl")
+	if err := os.WriteFile(fresh, stamp(start.Add(time.Second)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a.Discover(cwd, start)
+	if err != nil || got != fresh {
+		t.Fatalf("Discover = %q, %v", got, err)
+	}
+}
+
+func TestRegistered(t *testing.T) {
+	a, ok := adapter.For("claude")
+	if !ok || a.Name() != "claude" || a.Bypass([]string{"--version"}) != true {
+		t.Fatalf("registry = %v %v", a, ok)
+	}
+}
