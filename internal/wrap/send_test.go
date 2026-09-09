@@ -17,7 +17,7 @@ import (
 )
 
 // busyAdapter is a non-queuing adapter whose busy state the test controls.
-type busyAdapter struct{ busy bool }
+type busyAdapter struct{ busy, prompt bool }
 
 func (b *busyAdapter) Name() string               { return "busy" }
 func (b *busyAdapter) VerifiedVersions() []string { return []string{"1"} }
@@ -33,6 +33,7 @@ func (b *busyAdapter) Align(*adapter.Transcript, []string) []adapter.TurnAlignme
 func (b *busyAdapter) Fallback([]string) []adapter.TurnAlignment                   { return nil }
 func (b *busyAdapter) InputRow([]string) int                                       { return -1 }
 func (b *busyAdapter) Busy(*screen.Screen) bool                                    { return b.busy }
+func (b *busyAdapter) Prompt(*screen.Screen) bool                                  { return b.prompt }
 func (b *busyAdapter) QueuesWhenBusy() bool                                        { return false }
 
 func threeCardTray() *card.Tray {

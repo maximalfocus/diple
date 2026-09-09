@@ -313,3 +313,53 @@ func TestWindowedViewportAlignsTheTurnsItShows(t *testing.T) {
 		})
 	}
 }
+
+// The dialog footers Claude Code 2.1.266 draws, read off real sessions: a
+// permission question, the model and effort choosers, and the workspace
+// trust question.
+var promptFooters = []string{
+	"Esc to cancel · Tab to amend",
+	"Enter to set as default · s to use this session only · Esc to cancel",
+	"←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel",
+	"Enter to confirm · Esc to cancel",
+}
+
+// What the same footer row carries when no dialog is up.
+var notPrompts = []string{
+	"✻ Skedaddling… esc to interrupt · ← for agents",
+	"⏵⏵ auto mode on (shift+tab to cycle) · ? for shortcuts",
+	"❯ Try \"write a test for <filepath>\"",
+	"",
+}
+
+func screenShowing(row string) *screen.Screen {
+	s := screen.New(80, 6)
+	_, _ = s.Write([]byte("\x1b[1;1H" + row))
+	return s
+}
+
+func TestPromptRecognisesTheAgentsOwnDialogs(t *testing.T) {
+	a := &Adapter{}
+	for _, row := range promptFooters {
+		if !a.Prompt(screenShowing(row)) {
+			t.Fatalf("not recognised as a prompt: %q", row)
+		}
+	}
+	for _, row := range notPrompts {
+		if a.Prompt(screenShowing(row)) {
+			t.Fatalf("mistaken for a prompt: %q", row)
+		}
+	}
+	// A working agent is busy, never prompting.
+	busy := screenShowing("✻ Skedaddling… esc to interrupt · ← for agents")
+	if !a.Busy(busy) || a.Prompt(busy) {
+		t.Fatalf("busy=%v prompt=%v", a.Busy(busy), a.Prompt(busy))
+	}
+	// Neither recorded fixture shows a dialog.
+	for _, mode := range []string{"inline", "fullscreen"} {
+		s, _, _ := loadFixture(t, mode)
+		if a.Prompt(s) {
+			t.Fatalf("%s fixture reported a prompt", mode)
+		}
+	}
+}

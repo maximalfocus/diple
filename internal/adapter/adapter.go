@@ -105,6 +105,10 @@ type Adapter interface {
 	InputRow(screenRows []string) int
 	// Busy reports whether the agent is working, from the screen model.
 	Busy(s *screen.Screen) bool
+	// Prompt reports whether the agent is showing a native prompt — a
+	// permission question, a choice, a text question — that owns the
+	// keyboard until the user answers it.
+	Prompt(s *screen.Screen) bool
 	// QueuesWhenBusy reports whether the agent accepts input while busy and
 	// runs it when it becomes idle. When false, Diple holds a fold until the
 	// agent is idle.

@@ -14,6 +14,7 @@ import (
 	"github.com/maximalfocus/diple/internal/adapter"
 	"github.com/maximalfocus/diple/internal/card"
 	"github.com/maximalfocus/diple/internal/fold"
+	"github.com/maximalfocus/diple/internal/keys"
 	"github.com/maximalfocus/diple/internal/screen"
 )
 
@@ -73,6 +74,8 @@ type Session struct {
 	Plain bool
 	// Marks enables the gutter mark on anchored blocks.
 	Marks bool
+	// Keys is the binding table this session answers to.
+	Keys keys.Table
 	// SetPTYRows, when set, is called with the row count the wrapped
 	// process should see whenever the tray changes height.
 	SetPTYRows func(rows int)
@@ -89,6 +92,10 @@ type Session struct {
 	trayH      int
 	sel        *selection
 	editor     *editor
+	// suspended holds the editor put away while the agent shows a native
+	// prompt, so the note comes back exactly as it was.
+	suspended  *editor
+	prompting  bool
 	chooser    bool // the free-card kind chooser is showing
 	search     *searchField
 	nav        *navRequest
@@ -119,7 +126,7 @@ type rowRange struct {
 // NewSession wires a terminal and an agent writer to a fresh model.
 func NewSession(term, agent io.Writer, cols, rows int, rec Recorder) *Session {
 	s := &Session{term: term, agent: agent, Model: screen.New(cols, rows), rec: rec, cols: cols, rows: rows,
-		Tray: &card.Tray{}, Marks: true}
+		Tray: &card.Tray{}, Marks: true, Keys: keys.Defaults()}
 	s.Model.OnMode = s.onMode
 	return s
 }
@@ -306,6 +313,7 @@ func (s *Session) HandleOutput(p []byte) error {
 			err = e
 		}
 	}
+	s.updatePromptLocked()
 	if e := s.driveNavLocked(); e != nil && err == nil {
 		err = e
 	}
@@ -344,29 +352,15 @@ func (s *Session) HandleInput(p []byte) error {
 			p = p[i:]
 			continue
 		}
-		// Alt+N opens the free-card chooser whether or not the tray has
-		// cards, which is the only way to write the first one.
-		if s.editor == nil && s.search == nil && len(p) >= 2 && p[0] == 0x1b && p[1] == 'n' {
-			p = p[2:]
-			s.chooser = true
-			s.sel = nil
+		// Alt gestures: the table's Alt bindings, taken only while Diple
+		// has no field of its own open and the agent is not asking a
+		// question of its own.
+		if n, handled, e := s.altGestureLocked(p); handled {
+			p = p[n:]
+			if e != nil && err == nil {
+				err = e
+			}
 			continue
-		}
-		if s.editor == nil && s.search == nil && s.Tray.Len() > 0 && len(p) >= 2 && p[0] == 0x1b {
-			if p[1] == '\r' || p[1] == '\n' {
-				p = p[2:]
-				if e := s.requestSendLocked(true); e != nil && err == nil {
-					err = e
-				}
-				continue
-			}
-			if p[1] == 'p' {
-				p = p[2:]
-				if e := s.requestSendLocked(false); e != nil && err == nil {
-					err = e
-				}
-				continue
-			}
 		}
 		if ev, n, ok, incomplete := parseSGRMouse(p); ok {
 			p = p[n:]
@@ -419,6 +413,10 @@ func (s *Session) HandleInput(p []byte) error {
 // the tray, or the agent.
 func (s *Session) keysLocked(forward, chunk []byte) []byte {
 	s.highlight = nil
+	// A native prompt owns the keyboard until it is answered.
+	if s.prompting {
+		return append(forward, chunk...)
+	}
 	if s.editor != nil {
 		s.editorKeysLocked(chunk)
 		return forward
@@ -442,21 +440,25 @@ func (s *Session) keysLocked(forward, chunk []byte) []byte {
 	}
 	// Any other key ends a jump the agent has not finished scrolling.
 	s.nav = nil
-	if len(chunk) == 1 && s.navOwnedLocked() {
-		switch chunk[0] {
-		case '[':
+	k, single := keyOf(chunk)
+	if single && s.navOwnedLocked() {
+		switch {
+		case s.Keys.Is(keys.PrevTurn, k):
 			s.setKeyErr(s.jumpTurnLocked(-1))
 			return forward
-		case ']':
+		case s.Keys.Is(keys.NextTurn, k):
 			s.setKeyErr(s.jumpTurnLocked(1))
 			return forward
-		case '/':
+		case s.Keys.Is(keys.Search, k):
 			s.openSearchLocked()
 			return forward
 		}
 	}
 	switch {
 	case s.sel != nil:
+		if single && s.selectionKeyLocked(k) {
+			return forward
+		}
 		if s.toolbarKeyLocked(chunk) {
 			return forward
 		}
@@ -466,12 +468,79 @@ func (s *Session) keysLocked(forward, chunk []byte) []byte {
 		s.trayKeysLocked(chunk)
 		return forward
 	}
-	if len(chunk) == 1 && chunk[0] == '\t' && s.Tray.Len() > 0 {
+	if single && s.Keys.Is(keys.TrayFocus, k) && s.Tray.Len() > 0 {
 		s.focus = focusTray
 		s.clampTraySel()
 		return forward
 	}
 	return append(forward, chunk...)
+}
+
+// keyOf reads one input unit as a single key, which is what a binding is.
+func keyOf(chunk []byte) (keys.Key, bool) {
+	r, size := utf8.DecodeRune(chunk)
+	if size != len(chunk) || r == utf8.RuneError {
+		return keys.Key{}, false
+	}
+	return keys.Key{Rune: r}, true
+}
+
+// altGestureLocked takes an ESC-prefixed key from the head of p and runs the
+// gesture the table binds it to. It reports how many bytes it consumed and
+// whether it handled anything at all.
+func (s *Session) altGestureLocked(p []byte) (int, bool, error) {
+	if s.prompting || s.editor != nil || s.search != nil || len(p) < 2 || p[0] != 0x1b {
+		return 0, false, nil
+	}
+	// A CSI or SS3 sequence is a key of the terminal's own, never Alt.
+	if p[1] == '[' || p[1] == 'O' {
+		return 0, false, nil
+	}
+	r, size := utf8.DecodeRune(p[1:])
+	if size == 0 || r == utf8.RuneError {
+		return 0, false, nil
+	}
+	k := keys.Key{Rune: r, Alt: true}
+	n := 1 + size
+	switch {
+	case s.Keys.Is(keys.FreeCard, k):
+		s.chooser, s.sel = true, nil
+		return n, true, nil
+	case s.Keys.Is(keys.SelectBlock, k):
+		s.selectTopBlockLocked()
+		return n, true, nil
+	case s.Tray.Len() > 0 && s.Keys.Is(keys.Send, k):
+		return n, true, s.requestSendLocked(true)
+	case s.Tray.Len() > 0 && s.Keys.Is(keys.Paste, k):
+		return n, true, s.requestSendLocked(false)
+	}
+	return 0, false, nil
+}
+
+// updatePromptLocked follows the agent's own dialogs. While one is showing
+// Diple owns nothing: the editor is put away with its text, the selection,
+// search field and chooser are dismissed, and focus goes back to the native
+// box. When it clears, a put-away editor comes back.
+func (s *Session) updatePromptLocked() {
+	if s.adapter == nil {
+		return
+	}
+	prompting := s.adapter.Prompt(s.Model)
+	if prompting == s.prompting {
+		return
+	}
+	s.prompting = prompting
+	if prompting {
+		if s.editor != nil {
+			s.suspended, s.editor = s.editor, nil
+		}
+		s.sel, s.search, s.chooser = nil, nil, false
+		s.focus = focusAgent
+		return
+	}
+	if s.suspended != nil {
+		s.editor, s.suspended = s.suspended, nil
+	}
 }
 
 func encodeSGRMouse(ev mouseEvent) []byte {
