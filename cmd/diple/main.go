@@ -19,11 +19,13 @@ import (
 	"github.com/maximalfocus/diple/internal/agent"
 	"github.com/maximalfocus/diple/internal/card"
 	"github.com/maximalfocus/diple/internal/keys"
+	"github.com/maximalfocus/diple/internal/shim"
 	"github.com/maximalfocus/diple/internal/wrap"
 )
 
 const usage = `usage: diple [--record <fixture>] [--plain] [--no-marks] <agent> [args…]
        diple blocks <transcript>
+       diple on|off|status
        diple stash|unstash [<agent>]
        diple bindings
 
@@ -35,6 +37,9 @@ agent directly.
   --plain              draw only with reverse and underline
   --no-marks           no gutter mark on annotated blocks
   --no-archive         do not archive sent folds
+  on                   install the shims and put them on PATH
+  off                  remove the shims and the PATH line
+  status               report the shims, PATH, and startup files
   blocks <transcript>  print the turns and blocks detected in a transcript
   stash [<agent>]      set the agent's saved tray aside
   unstash [<agent>]    give the stashed tray back to the next session
@@ -83,6 +88,8 @@ func run(args []string) int {
 			return stash(a, args[1:])
 		case a == "bindings":
 			return bindings(args[1:])
+		case a == "on" || a == "off" || a == "status":
+			return shims(a, args[1:])
 		default:
 			return wrapAgent(a, args[1:], f)
 		}
@@ -93,7 +100,14 @@ func run(args []string) int {
 
 func wrapAgent(name string, args []string, f flags) int {
 	self, _ := os.Executable()
-	path, err := agent.Locate(name, os.Getenv("PATH"), "", self)
+	// The shim that launched us says which directory to skip; without one,
+	// the installed shim directory is skipped anyway, so a shim on PATH can
+	// never send Diple back to itself.
+	skip := os.Getenv("DIPLE_SHIM_DIR")
+	if skip == "" {
+		skip, _ = shim.Dir()
+	}
+	path, err := agent.Locate(name, os.Getenv("PATH"), skip, self)
 	if err != nil {
 		if errors.Is(err, agent.ErrNotFound) {
 			fmt.Fprintf(os.Stderr, "diple: %s: command not found\n", name)
@@ -102,13 +116,19 @@ func wrapAgent(name string, args []string, f flags) int {
 		fmt.Fprintf(os.Stderr, "diple: %v\n", err)
 		return 1
 	}
+	// Never execute one of Diple's own shims as the agent: that is an
+	// endless loop, and it means the shim directory was not skipped.
+	if shim.IsShim(path) {
+		fmt.Fprintf(os.Stderr, "diple: %s on PATH is a diple shim, not the real %s; run `diple status`\n", path, name)
+		return 127
+	}
 	argv0 := name
 	if strings.ContainsRune(name, os.PathSeparator) {
 		argv0 = filepath.Base(name)
 	}
 
 	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
-	if !interactive || agent.Bypass(args) {
+	if !interactive || os.Getenv("DIPLE") == "0" || agent.Bypass(args) {
 		argv := append([]string{argv0}, args...)
 		err := syscall.Exec(path, argv, os.Environ())
 		fmt.Fprintf(os.Stderr, "diple: exec %s: %v\n", path, err)
@@ -131,6 +151,66 @@ func wrapAgent(name string, args []string, f flags) int {
 		}
 	}
 	return code
+}
+
+// shims implements `diple on|off|status`: the shims that make Diple
+// default-on, and what is in place right now.
+func shims(op string, args []string) int {
+	if len(args) != 0 {
+		fmt.Fprint(os.Stderr, usage)
+		return 64
+	}
+	dir, err := shim.Dir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "diple: %v\n", err)
+		return 1
+	}
+	startup, err := shim.StartupFiles()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "diple: %v\n", err)
+		return 1
+	}
+	agents := adapter.Names()
+	switch op {
+	case "status":
+		fmt.Print(shim.Report(dir, agents, os.Getenv("PATH"), startup))
+		return 0
+	case "on":
+		self, err := os.Executable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "diple: %v\n", err)
+			return 1
+		}
+		if resolved, err := filepath.EvalSymlinks(self); err == nil {
+			self = resolved
+		}
+		changed, err := shim.Install(dir, self, agents, startup)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "diple: %v\n", err)
+			return 1
+		}
+		report(changed, fmt.Sprintf("shims for %s already in place", strings.Join(agents, ", ")))
+		fmt.Printf("re-read your profile or run: export PATH=%q\n", dir+":"+os.Getenv("PATH"))
+		return 0
+	default:
+		changed, err := shim.Remove(dir, agents, startup)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "diple: %v\n", err)
+			return 1
+		}
+		report(changed, "nothing to remove")
+		return 0
+	}
+}
+
+func report(changed []string, none string) {
+	if len(changed) == 0 {
+		fmt.Println(none)
+		return
+	}
+	for _, c := range changed {
+		fmt.Println(c)
+	}
 }
 
 // bindings implements `diple bindings`: the effective table, defaults and

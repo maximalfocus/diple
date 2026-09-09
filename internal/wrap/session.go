@@ -94,9 +94,12 @@ type Session struct {
 	editor     *editor
 	// suspended holds the editor put away while the agent shows a native
 	// prompt, so the note comes back exactly as it was.
-	suspended  *editor
-	prompting  bool
-	chooser    bool // the free-card kind chooser is showing
+	suspended *editor
+	prompting bool
+	chooser   bool // the free-card kind chooser is showing
+	// hidden is the session hotkey's state: the layer is out of the way
+	// until it is pressed again, and the tray keeps its cards meanwhile.
+	hidden     bool
 	search     *searchField
 	nav        *navRequest
 	focus      focusKind
@@ -413,8 +416,9 @@ func (s *Session) HandleInput(p []byte) error {
 // the tray, or the agent.
 func (s *Session) keysLocked(forward, chunk []byte) []byte {
 	s.highlight = nil
-	// A native prompt owns the keyboard until it is answered.
-	if s.prompting {
+	// A native prompt owns the keyboard until it is answered, and a hidden
+	// layer owns nothing at all.
+	if s.prompting || s.hidden {
 		return append(forward, chunk...)
 	}
 	if s.editor != nil {
@@ -502,6 +506,18 @@ func (s *Session) altGestureLocked(p []byte) (int, bool, error) {
 	}
 	k := keys.Key{Rune: r, Alt: true}
 	n := 1 + size
+	// Hiding is the one gesture a hidden layer still answers to.
+	if s.Keys.Is(keys.Hide, k) {
+		s.hidden = !s.hidden
+		if s.hidden {
+			s.sel, s.search, s.chooser, s.highlight = nil, nil, false, nil
+			s.focus = focusAgent
+		}
+		return n, true, nil
+	}
+	if s.hidden {
+		return 0, false, nil
+	}
 	switch {
 	case s.Keys.Is(keys.FreeCard, k):
 		s.chooser, s.sel = true, nil

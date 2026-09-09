@@ -122,6 +122,14 @@ func (s *Session) mouseLocked(ev mouseEvent, forward *[]byte) error {
 	px := ev.x - 1
 	tracking := s.Model.MouseTracking()
 
+	// A hidden layer owns no gesture: reports reach the agent if it asked
+	// for them and are dropped otherwise.
+	if s.hidden {
+		if tracking {
+			*forward = append(*forward, encodeSGRMouse(ev)...)
+		}
+		return nil
+	}
 	if ev.isWheel() {
 		s.nav = nil
 		if tracking && s.Model.AltActive() {

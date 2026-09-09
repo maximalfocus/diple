@@ -192,3 +192,48 @@ next-turn = m
 		t.Fatalf("the rebound key did not move the view: view %d→%d agent=%q", before, viewTop(s), agent.String())
 	}
 }
+
+func TestHideHotkeyGetsOutOfTheWayAndComesBack(t *testing.T) {
+	s, term, agent := fixtureSession(t, "inline")
+	selectBlockByText(t, s, "That is the whole plan.")
+	send(t, s, "f")
+	send(t, s, "tighten this\r")
+	if s.Tray.Len() != 1 || !s.Composited() {
+		t.Fatalf("tray=%d composited=%v", s.Tray.Len(), s.Composited())
+	}
+	rowsWithTray := s.AgentRows()
+
+	// Alt+H hides the layer: the wrapped process gets its rows back and
+	// Diple stops owning the screen.
+	send(t, s, "\x1bh")
+	if s.Composited() || s.AgentRows() != s.rows {
+		t.Fatalf("hidden: composited=%v agentRows=%d rows=%d", s.Composited(), s.AgentRows(), s.rows)
+	}
+	if rowsWithTray >= s.rows {
+		t.Fatalf("the tray never took a row: %d vs %d", rowsWithTray, s.rows)
+	}
+	// While hidden the agent's bytes go straight through, and Diple's own
+	// gestures are inert.
+	term.Reset()
+	chunk := []byte("\x1b[1mhello\x1b[0m\r\n")
+	if err := s.HandleOutput(chunk); err != nil {
+		t.Fatal(err)
+	}
+	if got := term.Bytes(); string(got) != string(chunk) {
+		t.Fatalf("hidden output = %q, want %q", got, chunk)
+	}
+	agent.Reset()
+	send(t, s, "\x1bn") // the free-card chooser must not open
+	send(t, s, "j")
+	if s.chooser || s.sel != nil || s.Composited() {
+		t.Fatalf("hidden layer answered a gesture: chooser=%v sel=%v", s.chooser, s.sel)
+	}
+	// Alt+H again brings the layer back with the tray intact.
+	send(t, s, "\x1bh")
+	if !s.Composited() || s.Tray.Len() != 1 || s.Tray.Cards[0].Text != "tighten this" {
+		t.Fatalf("restored: composited=%v tray=%+v", s.Composited(), s.Tray.Cards)
+	}
+	if s.AgentRows() != rowsWithTray {
+		t.Fatalf("agent rows = %d, want %d", s.AgentRows(), rowsWithTray)
+	}
+}
