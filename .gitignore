@@ -2,3 +2,6 @@
 /diple
 *.test
 *.out
+
+# host-verification captures, which are machine-specific
+.captures/

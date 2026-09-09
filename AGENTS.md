@@ -158,6 +158,15 @@ go test ./...
 
 CI runs the same on Linux and macOS and cross-compiles darwin/linux × amd64/arm64.
 
+`scripts/verify-hosts.sh [--plain] [host…]` is the release-boundary check: it
+records a wrapped session in each host the portability list names, types one
+gesture into the hosts that can be driven, and runs `internal/hostcheck` over
+the capture — the envelope asked for and given back, the agent's bytes
+forwarded unchanged with an empty tray, no 24-bit colour from Diple, a card
+made where a gesture could be typed, and the terminal restored. It is not part
+of CI, because it needs those terminals installed; `RELEASE.md` records the
+result.
+
 ## Commits and pull requests
 
 Commit subjects are `type: summary` in the imperative, at most 72 characters.
