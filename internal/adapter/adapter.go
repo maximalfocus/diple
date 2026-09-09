@@ -103,6 +103,12 @@ type Adapter interface {
 	// InputRow returns the index of the row where the native input box
 	// begins within the visible screen rows, or -1 when it is not shown.
 	InputRow(screenRows []string) int
+	// Busy reports whether the agent is working, from the screen model.
+	Busy(s *screen.Screen) bool
+	// QueuesWhenBusy reports whether the agent accepts input while busy and
+	// runs it when it becomes idle. When false, Diple holds a fold until the
+	// agent is idle.
+	QueuesWhenBusy() bool
 }
 
 var (

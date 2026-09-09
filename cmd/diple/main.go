@@ -30,6 +30,7 @@ agent directly.
   --record <fixture>   write the session as a fixture for replay
   --plain              draw only with reverse and underline
   --no-marks           no gutter mark on annotated blocks
+  --no-archive         do not archive sent folds
   blocks <transcript>  print the turns and blocks detected in a transcript
 `
 
@@ -38,9 +39,10 @@ func main() {
 }
 
 type flags struct {
-	record  string
-	plain   bool
-	noMarks bool
+	record    string
+	plain     bool
+	noMarks   bool
+	noArchive bool
 }
 
 func run(args []string) int {
@@ -52,6 +54,8 @@ func run(args []string) int {
 			f.plain, args = true, args[1:]
 		case a == "--no-marks":
 			f.noMarks, args = true, args[1:]
+		case a == "--no-archive":
+			f.noArchive, args = true, args[1:]
 		case a == "--record":
 			if len(args) < 2 {
 				fmt.Fprint(os.Stderr, usage)
@@ -102,7 +106,7 @@ func wrapAgent(name string, args []string, f flags) int {
 
 	ad, _ := adapter.For(argv0)
 	code, err := wrap.Run(wrap.Options{
-		Path: path, Name: argv0, Args: args, Record: f.record, Adapter: ad, Plain: f.plain, NoMarks: f.noMarks,
+		Path: path, Name: argv0, Args: args, Record: f.record, Adapter: ad, Plain: f.plain, NoMarks: f.noMarks, NoArchive: f.noArchive,
 		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 	})
 	if err != nil {
