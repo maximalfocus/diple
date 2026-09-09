@@ -13,11 +13,20 @@ import (
 func selectBlockByText(t *testing.T, s *Session, prefix string) {
 	t.Helper()
 	send(t, s, "\x1bk") // select-block: the first block in view
-	for i := 0; i < 60; i++ {
-		if s.sel != nil && strings.HasPrefix(strings.TrimSpace(s.sel.text), prefix) {
+	at := func() bool {
+		return s.sel != nil && strings.HasPrefix(strings.TrimSpace(s.sel.text), prefix)
+	}
+	for _, key := range []string{"j", "k"} {
+		for i := 0; i < 60; i++ {
+			if at() {
+				return
+			}
+			send(t, s, key)
+		}
+		if at() {
 			return
 		}
-		send(t, s, "j")
+		send(t, s, "\x1bk")
 	}
 	got := ""
 	if s.sel != nil {

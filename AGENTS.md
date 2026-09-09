@@ -18,8 +18,10 @@ palette; the agent's output is never repainted with different attributes.
   filtering, turn navigation and transcript search, terminal restore, and the
   transcript tracker.
 - `internal/adapter` — the per-CLI interface (transcript discovery and parsing,
-  rendering mode, alignment) and its registry; `internal/adapter/claude` is the
-  Claude Code adapter with its pinned fixtures under `testdata/<version>/`.
+  rendering mode, alignment), the shared turn-to-region matching every adapter
+  aligns with, and the registry; `internal/adapter/claude` and
+  `internal/adapter/codex` are the agent adapters, each with its pinned
+  fixtures under `testdata/<version>/`.
 - `internal/blocks` — Markdown to blocks: paragraphs, headings, list items, code
   blocks and lines, diff lines, table rows, tool calls.
 - `internal/align` — matching a turn's blocks to rendered rows by letters and
@@ -68,6 +70,19 @@ stays open: a path is compiled as a reference, and a command is run once, then,
 and what it printed travels with the card. `diple stash` sets an agent's saved
 tray aside in one slot and `diple unstash` gives it to that agent's next
 session.
+
+## Adapters
+
+An adapter is the only place an agent's own facts live: where its transcript
+is and how it parses, the rendering mode, how a turn's blocks line up with
+rows, where its input box starts, when it is busy, and when it is asking a
+question of its own. Alignment itself is shared — `adapter.Assign` matches
+turns to the turn-marker regions the rows actually carry — so an adapter
+passes its decoration facts and nothing more. A transcript that is missing or
+unreadable is never an error: the paragraph fallback keeps annotation working,
+which matters for the Codex CLI, whose 0.153.4 keeps a running session's
+thread in its own state database and writes the rollout file Diple parses only
+later.
 
 ## Shims and default-on
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/maximalfocus/diple/internal/adapter"
 	_ "github.com/maximalfocus/diple/internal/adapter/claude"
+	_ "github.com/maximalfocus/diple/internal/adapter/codex"
 	"github.com/maximalfocus/diple/internal/agent"
 	"github.com/maximalfocus/diple/internal/card"
 	"github.com/maximalfocus/diple/internal/keys"
