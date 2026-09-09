@@ -7,14 +7,30 @@ palette; the agent's output is never repainted with different attributes.
 
 ## Layout
 
-- `cmd/diple` — the `diple` command. `diple <agent> [args…]` is the wrapped form.
+- `cmd/diple` — the `diple` command. `diple <agent> [args…]` is the wrapped form;
+  `diple blocks <transcript>` prints an adapter's turns and blocks.
 - `internal/agent` — locating the real agent executable and the non-interactive
   invocation forms that bypass the wrapper.
 - `internal/screen` — the VT screen model: cells with original attributes,
   scrollback, alternate screen, and re-emission of rows.
 - `internal/record` — session fixture recording and replay.
 - `internal/wrap` — the session: PTY forwarding, wheel-owned scrollback, input
-  filtering, terminal restore.
+  filtering, terminal restore, and the transcript tracker.
+- `internal/adapter` — the per-CLI interface (transcript discovery and parsing,
+  rendering mode, alignment) and its registry; `internal/adapter/claude` is the
+  Claude Code adapter with its pinned fixtures under `testdata/<version>/`.
+- `internal/blocks` — Markdown to blocks: paragraphs, headings, list items, code
+  blocks and lines, diff lines, table rows, tool calls.
+- `internal/align` — matching a turn's blocks to rendered rows by letters and
+  digits only, in order, tolerant of wrapping and decoration.
+
+## Rendering modes
+
+An agent runs inline (it prints into the terminal, Diple's scrollback is the
+history) or fullscreen (alternate screen with its own viewport and mouse
+tracking, the agent viewport is the history). Claude Code's `tui: fullscreen`
+setting selects the latter. Every adapter reports the mode from the screen
+model, and alignment runs against whichever history the mode provides.
 
 ## Rules
 

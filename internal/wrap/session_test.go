@@ -16,6 +16,7 @@ type memRecorder struct {
 func (r *memRecorder) Output(p []byte)       { r.out = append(r.out, p...) }
 func (r *memRecorder) Input(p []byte)        { r.in = append(r.in, p...) }
 func (r *memRecorder) Resize(cols, rows int) { r.resizes = append(r.resizes, [2]int{cols, rows}) }
+func (r *memRecorder) Transcript(string)     {}
 
 func newTestSession(cols, rows int) (*Session, *bytes.Buffer, *bytes.Buffer) {
 	term := &bytes.Buffer{}

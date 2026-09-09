@@ -16,6 +16,7 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
+	"github.com/maximalfocus/diple/internal/adapter"
 	"github.com/maximalfocus/diple/internal/record"
 )
 
@@ -25,9 +26,11 @@ type Options struct {
 	Name   string   // argv[0] the agent sees
 	Args   []string // remaining arguments
 	Record string   // fixture path, or "" for none
-	Stdin  *os.File // the host terminal
-	Stdout *os.File
-	Stderr *os.File
+	// Adapter, when set, follows the session transcript.
+	Adapter adapter.Adapter
+	Stdin   *os.File // the host terminal
+	Stdout  *os.File
+	Stderr  *os.File
 }
 
 // drainTimeout bounds how long Run waits for the agent's last bytes after it
@@ -79,6 +82,18 @@ func Run(opts Options) (exitCode int, err error) {
 	defer restore()
 
 	session := NewSession(opts.Stdout, ptmx, cols, rows, rec)
+	if opts.Adapter != nil {
+		cwd, err := os.Getwd()
+		if err == nil {
+			onFound := func(string) {}
+			if rec != nil {
+				onFound = rec.Transcript
+			}
+			session.Tracker = NewTracker(opts.Adapter, cwd, onFound)
+			session.Tracker.Start()
+			defer session.Tracker.Stop()
+		}
+	}
 	sessionStopped := false
 	defer func() {
 		if !sessionStopped {

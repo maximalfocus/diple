@@ -21,9 +21,10 @@ const Format = 1
 
 // Event kinds.
 const (
-	KindOutput = "out"    // bytes from the agent to the terminal
-	KindInput  = "in"     // bytes from the user to the agent
-	KindResize = "resize" // the terminal changed size
+	KindOutput     = "out"        // bytes from the agent to the terminal
+	KindInput      = "in"         // bytes from the user to the agent
+	KindResize     = "resize"     // the terminal changed size
+	KindTranscript = "transcript" // the session transcript was discovered
 )
 
 // Header is the first line of a fixture.
@@ -38,19 +39,21 @@ type Header struct {
 
 // Event is one line after the header.
 type Event struct {
-	At   time.Duration `json:"at"`
-	Kind string        `json:"kind"`
-	Data []byte        `json:"data,omitempty"`
-	Cols int           `json:"cols,omitempty"`
-	Rows int           `json:"rows,omitempty"`
+	At      time.Duration `json:"at"`
+	Kind    string        `json:"kind"`
+	Data    []byte        `json:"data,omitempty"`
+	Cols    int           `json:"cols,omitempty"`
+	Rows    int           `json:"rows,omitempty"`
+	Session string        `json:"session,omitempty"` // transcript session id
 }
 
 type wireEvent struct {
-	At   int64  `json:"at"`
-	Kind string `json:"kind"`
-	Data string `json:"data,omitempty"`
-	Cols int    `json:"cols,omitempty"`
-	Rows int    `json:"rows,omitempty"`
+	At      int64  `json:"at"`
+	Kind    string `json:"kind"`
+	Data    string `json:"data,omitempty"`
+	Cols    int    `json:"cols,omitempty"`
+	Rows    int    `json:"rows,omitempty"`
+	Session string `json:"session,omitempty"`
 }
 
 // Writer appends events to a fixture. It is safe for concurrent use.
@@ -103,6 +106,12 @@ func (w *Writer) Resize(cols, rows int) {
 	w.write(wireEvent{At: w.since(), Kind: KindResize, Cols: cols, Rows: rows})
 }
 
+// Transcript records that the session transcript was discovered. Only the
+// session id is kept, never the path, so a fixture carries no home directory.
+func (w *Writer) Transcript(sessionID string) {
+	w.write(wireEvent{At: w.since(), Kind: KindTranscript, Session: sessionID})
+}
+
 // Close flushes and closes the fixture, returning the first write error.
 func (w *Writer) Close() error {
 	w.mu.Lock()
@@ -147,7 +156,7 @@ func Read(r io.Reader) (*Recording, error) {
 		if err := json.Unmarshal(sc.Bytes(), &we); err != nil {
 			return nil, fmt.Errorf("record: line %d: %w", line, err)
 		}
-		ev := Event{At: time.Duration(we.At), Kind: we.Kind, Cols: we.Cols, Rows: we.Rows}
+		ev := Event{At: time.Duration(we.At), Kind: we.Kind, Cols: we.Cols, Rows: we.Rows, Session: we.Session}
 		if we.Data != "" {
 			data, err := base64.StdEncoding.DecodeString(we.Data)
 			if err != nil {
@@ -156,7 +165,7 @@ func Read(r io.Reader) (*Recording, error) {
 			ev.Data = data
 		}
 		switch ev.Kind {
-		case KindOutput, KindInput, KindResize:
+		case KindOutput, KindInput, KindResize, KindTranscript:
 		default:
 			return nil, fmt.Errorf("record: line %d: unknown event kind %q", line, ev.Kind)
 		}

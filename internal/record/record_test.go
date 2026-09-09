@@ -19,6 +19,7 @@ func TestRoundTripAndReplay(t *testing.T) {
 	w.Input([]byte("q"))
 	w.Resize(6, 2)
 	w.Output([]byte("\x1b[1mworld\x1b[0m"))
+	w.Transcript("abc-123")
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -30,8 +31,11 @@ func TestRoundTripAndReplay(t *testing.T) {
 	if rec.Header.Agent != "fake" || rec.Header.Cols != 10 || rec.Header.Format != Format {
 		t.Fatalf("header = %+v", rec.Header)
 	}
-	if len(rec.Events) != 4 || rec.Events[1].Kind != KindInput || rec.Events[2].Cols != 6 {
+	if len(rec.Events) != 5 || rec.Events[1].Kind != KindInput || rec.Events[2].Cols != 6 {
 		t.Fatalf("events = %+v", rec.Events)
+	}
+	if rec.Events[4].Kind != KindTranscript || rec.Events[4].Session != "abc-123" {
+		t.Fatalf("transcript event = %+v", rec.Events[4])
 	}
 	if !bytes.Equal(rec.Output(), []byte("hello\r\n\x1b[1mworld\x1b[0m")) {
 		t.Fatalf("output = %q", rec.Output())

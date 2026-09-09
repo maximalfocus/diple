@@ -29,6 +29,7 @@ type Recorder interface {
 	Output(p []byte)
 	Input(p []byte)
 	Resize(cols, rows int)
+	Transcript(sessionID string)
 }
 
 // Session is the live/scrolled state machine between an agent and a terminal.
@@ -39,6 +40,8 @@ type Session struct {
 	agent io.Writer // agent's PTY
 	Model *screen.Screen
 	rec   Recorder
+	// Tracker follows the session transcript when an adapter is known.
+	Tracker *Tracker
 
 	cols, rows int
 	back       int // rows scrolled up from live; 0 is live
@@ -84,6 +87,19 @@ func (s *Session) Stop() error {
 		first = err
 	}
 	return first
+}
+
+// HistoryRows returns the rows the rendering mode provides as history, as
+// plain text: scrollback plus the screen inline, the visible screen when
+// the agent is on the alternate screen.
+func (s *Session) HistoryRows() []string {
+	var rows []string
+	if !s.Model.AltActive() {
+		for _, l := range s.Model.History() {
+			rows = append(rows, l.String())
+		}
+	}
+	return append(rows, s.Model.Text()...)
 }
 
 // Scrolled reports whether the viewport shows scrollback rather than live.

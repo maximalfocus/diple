@@ -14,17 +14,21 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/maximalfocus/diple/internal/adapter"
+	_ "github.com/maximalfocus/diple/internal/adapter/claude"
 	"github.com/maximalfocus/diple/internal/agent"
 	"github.com/maximalfocus/diple/internal/wrap"
 )
 
 const usage = `usage: diple [--record <fixture>] <agent> [args…]
+       diple blocks <transcript>
 
 Runs <agent> (for example claude) under Diple. Non-interactive invocations
 (-p/--print, --version, --help) and sessions without a terminal run the real
 agent directly.
 
   --record <fixture>   write the session as a fixture for replay
+  blocks <transcript>  print the turns and blocks detected in a transcript
 `
 
 func main() {
@@ -50,6 +54,8 @@ func run(args []string) int {
 		case strings.HasPrefix(a, "-"):
 			fmt.Fprintf(os.Stderr, "diple: unknown option %s\n%s", a, usage)
 			return 64
+		case a == "blocks":
+			return printBlocks(args[1:])
 		default:
 			return wrapAgent(a, args[1:], recordPath)
 		}
@@ -82,8 +88,9 @@ func wrapAgent(name string, args []string, recordPath string) int {
 		return 126
 	}
 
+	ad, _ := adapter.For(argv0)
 	code, err := wrap.Run(wrap.Options{
-		Path: path, Name: argv0, Args: args, Record: recordPath,
+		Path: path, Name: argv0, Args: args, Record: recordPath, Adapter: ad,
 		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 	})
 	if err != nil {
@@ -93,4 +100,59 @@ func wrapAgent(name string, args []string, recordPath string) int {
 		}
 	}
 	return code
+}
+
+// printBlocks implements `diple blocks <transcript>`: the turns and blocks
+// an adapter detects in a transcript file, one block per line, as fixtures
+// and adapter authors need to see them.
+func printBlocks(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprint(os.Stderr, usage)
+		return 64
+	}
+	f, err := os.Open(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "diple: %v\n", err)
+		return 1
+	}
+	defer f.Close()
+	var (
+		tr     *adapter.Transcript
+		perr   error
+		chosen string
+	)
+	for _, name := range adapter.Names() {
+		ad, _ := adapter.For(name)
+		if _, err := f.Seek(0, 0); err != nil {
+			fmt.Fprintf(os.Stderr, "diple: %v\n", err)
+			return 1
+		}
+		tr, perr = ad.Parse(f)
+		chosen = name
+		if perr == nil || errors.As(perr, new(*adapter.VersionError)) {
+			break
+		}
+	}
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "diple: %v\n", perr)
+		return 1
+	}
+	fmt.Printf("agent %s version %s session %s turns %d\n", chosen, tr.Version, tr.SessionID, len(tr.Turns))
+	for _, turn := range tr.Turns {
+		fmt.Printf("turn %d\n", turn.Ordinal)
+		for i, b := range turn.Blocks {
+			text := b.Text
+			if b.Kind == "code-block" {
+				text = fmt.Sprintf("(%d lines, %s)", strings.Count(b.Text, "\n")+1, b.Lang)
+			}
+			if b.Kind == "list-item" {
+				text = fmt.Sprintf("[%d] %s", b.Ordinal, text)
+			}
+			if b.Parent >= 0 {
+				text = "  " + text
+			}
+			fmt.Printf("  %3d %-10s %s\n", i, b.Kind, text)
+		}
+	}
+	return 0
 }
