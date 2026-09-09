@@ -158,6 +158,26 @@ go test ./...
 
 CI runs the same on Linux and macOS and cross-compiles darwin/linux × amd64/arm64.
 
+`scripts/verify-hosts.sh [--plain] [host…]` is the release-boundary check: it
+records a wrapped session in each host the portability list names, types one
+gesture into the hosts R-014 calls driven, and runs `internal/hostcheck` over
+the capture — the envelope asked for and given back, the agent's bytes
+forwarded unchanged with an empty tray, no 24-bit colour from Diple, a card
+made where the host is driven, and the terminal restored. It is not part of
+CI, because it needs those terminals installed; `RELEASE.md` records the
+result with the version each host was verified at.
+
+`internal/hostcheck` owns the class table: WezTerm, kitty, `tmux`, and `herdr`
+are driven, and every other host is pass-through only. The distinction is the
+whole point of the check. A driven host whose capture carries no gesture was
+not driven at all — a control interface that moved between host versions, a
+window the host's own CLI cannot address, a control socket too long to bind —
+and it fails rather than falling back to the pass-through check, because a
+silent fallback is how an unverified host came to report a pass. The script
+keeps its control sockets on a short temporary path for the same reason, and
+reports a host that is absent apart from one that is present and would not be
+driven.
+
 ## Commits and pull requests
 
 Commit subjects are `type: summary` in the imperative, at most 72 characters.

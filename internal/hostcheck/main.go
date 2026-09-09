@@ -1,0 +1,211 @@
+// Command hostcheck replays a recorded session and reports whether Diple
+// behaved in the host that produced it: that it asked for the mouse and gave
+// it back, forwarded the agent's bytes untouched while it owned nothing, drew
+// without 24-bit colour, drew the tray when it had cards, and left the
+// terminal as it found it.
+//
+// It is the release-boundary check behind `scripts/verify-hosts.sh`, and it
+// reads a capture written by `diple --record`.
+package main
+
+import (
+	"bytes"
+	"flag"
+	"fmt"
+	"os"
+	"regexp"
+	"strings"
+
+	"github.com/maximalfocus/diple/internal/record"
+	"github.com/maximalfocus/diple/internal/wrap"
+)
+
+// truecolour is an SGR that selects a 24-bit colour, which Diple never emits.
+var truecolour = regexp.MustCompile(`\x1b\[[0-9;]*\b(38|48);2;`)
+
+// styling is any SGR Diple emits while drawing. Under --plain only reverse
+// and underline are allowed.
+var sgr = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
+
+// driven names the hosts R-014 puts in the driven class: those offering a
+// documented way to type into a running window from outside. Their captures
+// must carry a gesture and the card it made. Every other host, named or not,
+// is pass-through only, and its capture covers forwarding, the mouse
+// envelope, and restore. A driven host with no gesture in its capture was not
+// driven at all, and saying so is the point: falling back to the pass-through
+// check is how an unverified host came to report a pass.
+var drivenHosts = map[string]bool{
+	"wezterm": true,
+	"kitty":   true,
+	"tmux":    true,
+	"herdr":   true,
+}
+
+func main() {
+	host := flag.String("host", "", "the host the capture came from")
+	version := flag.String("host-version", "", "the version of the host it came from")
+	plain := flag.Bool("plain", false, "the capture was recorded with --plain")
+	flag.Parse()
+	if flag.NArg() != 1 || *host == "" {
+		fmt.Fprintln(os.Stderr, "usage: hostcheck --host <name> [--host-version <v>] [--plain] <capture>")
+		os.Exit(64)
+	}
+	// R-014 records the version a host was verified at, as R-012 does for an
+	// adapter's CLI: a host's control interface is a versioned dependency,
+	// and a run that does not name it cannot be read later.
+	named := *host
+	if *version != "" {
+		named = fmt.Sprintf("%s %s", *host, *version)
+	}
+	failures := check(*host, flag.Arg(0), *plain)
+	for _, f := range failures {
+		fmt.Fprintf(os.Stderr, "FAIL %s: %s\n", named, f)
+	}
+	if len(failures) > 0 {
+		os.Exit(1)
+	}
+	fmt.Printf("PASS %s: %s\n", named, flag.Arg(0))
+}
+
+func check(host, path string, plain bool) []string {
+	rec, err := record.Open(path)
+	if err != nil {
+		return []string{fmt.Sprintf("cannot read the capture: %v", err)}
+	}
+	var failures []string
+
+	// First pass: the agent's bytes alone, with nothing typed. This is what
+	// R-002 promises in every host — the terminal sees exactly what the bare
+	// CLI would have written.
+	bare, _, err := replay(rec, false, plain)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	agent := agentBytes(rec)
+	body := strings.TrimSuffix(strings.TrimPrefix(bare, wrap.EnvelopeStart), wrap.EnvelopeEnd)
+	if !strings.HasPrefix(bare, wrap.EnvelopeStart) {
+		failures = append(failures, "the mouse envelope was never asked for")
+	}
+	if !strings.HasSuffix(bare, wrap.EnvelopeEnd) {
+		failures = append(failures, "the mouse envelope was never given back")
+	}
+	if body != agent {
+		failures = append(failures, "the agent's bytes were not forwarded unchanged with an empty tray")
+	}
+
+	// Second pass: the session as it was actually driven in the host.
+	driven, cards, err := replay(rec, true, plain)
+	if err != nil {
+		return append(failures, err.Error())
+	}
+	drawn := drawnByDiple(driven, bare)
+	if exercised(rec) {
+		if cards == 0 {
+			failures = append(failures, "a gesture was typed in this host but no card was made")
+		}
+		if drawn == "" {
+			failures = append(failures, "a gesture was typed in this host but Diple drew nothing")
+		}
+	}
+	if truecolour.MatchString(drawn) {
+		failures = append(failures, "Diple drew with 24-bit colour")
+	}
+	if plain {
+		if bad := disallowedUnderPlain(drawn); bad != "" {
+			failures = append(failures, "--plain drawing used "+bad)
+		}
+	}
+	if !exercised(rec) {
+		if drivenHosts[host] {
+			failures = append(failures, "this host is driven, but no gesture reached its capture: it was not verified")
+		} else {
+			fmt.Printf("note %s: pass-through only; the capture covers forwarding, the envelope, and restore\n", host)
+		}
+	}
+	return failures
+}
+
+// replay runs a capture through a fresh session, in the drawing mode it was
+// recorded in, optionally feeding the input the host recorded. It returns
+// what the terminal received and how many cards the session ended with.
+func replay(rec *record.Recording, withInput, plain bool) (string, int, error) {
+	var terminal bytes.Buffer
+	sess := wrap.NewSession(&terminal, &bytes.Buffer{}, rec.Header.Cols, rec.Header.Rows, nil)
+	sess.Plain = plain
+	if err := sess.Start(); err != nil {
+		return "", 0, fmt.Errorf("session did not start: %v", err)
+	}
+	for _, ev := range rec.Events {
+		switch ev.Kind {
+		case record.KindOutput:
+			if err := sess.HandleOutput(ev.Data); err != nil {
+				return "", 0, fmt.Errorf("forwarding failed: %v", err)
+			}
+		case record.KindInput:
+			if !withInput {
+				continue
+			}
+			if err := sess.HandleInput(ev.Data); err != nil {
+				return "", 0, fmt.Errorf("input handling failed: %v", err)
+			}
+		case record.KindResize:
+			_ = sess.Resize(ev.Cols, ev.Rows)
+		}
+	}
+	cards := sess.Tray.Len()
+	if err := sess.Stop(); err != nil {
+		return "", 0, fmt.Errorf("session did not stop cleanly: %v", err)
+	}
+	return terminal.String(), cards, nil
+}
+
+// agentBytes is everything the wrapped agent wrote.
+func agentBytes(rec *record.Recording) string {
+	var b strings.Builder
+	for _, ev := range rec.Events {
+		if ev.Kind == record.KindOutput {
+			b.Write(ev.Data)
+		}
+	}
+	return b.String()
+}
+
+// exercised reports whether a Diple gesture was typed into the host, which is
+// when Diple must draw and a card must appear.
+func exercised(rec *record.Recording) bool {
+	for _, ev := range rec.Events {
+		if ev.Kind != record.KindInput {
+			continue
+		}
+		if bytes.Contains(ev.Data, []byte("\x1bn")) || bytes.Contains(ev.Data, []byte("\x1b[<8;")) {
+			return true
+		}
+	}
+	return false
+}
+
+// drawnByDiple is what the driven session wrote beyond what the undriven one
+// wrote: Diple's own drawing, and nothing of the agent's.
+func drawnByDiple(driven, bare string) string {
+	i := 0
+	for i < len(driven) && i < len(bare) && driven[i] == bare[i] {
+		i++
+	}
+	return driven[i:]
+}
+
+// disallowedUnderPlain names the first attribute Diple used that --plain
+// forbids: anything but reverse and underline, and any colour.
+func disallowedUnderPlain(drawn string) string {
+	for _, m := range sgr.FindAllStringSubmatch(drawn, -1) {
+		for _, p := range strings.Split(m[1], ";") {
+			switch p {
+			case "", "0", "4", "7", "24", "27":
+				continue
+			default:
+				return "SGR " + p
+			}
+		}
+	}
+	return ""
+}
