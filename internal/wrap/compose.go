@@ -10,7 +10,7 @@ import (
 // ownsScreen reports whether anything of Diple's is showing, which is when
 // the session must composite instead of passing bytes through.
 func (s *Session) ownsScreen() bool {
-	return s.Tray.Len() > 0 || s.sel != nil || s.editor != nil || s.highlight != nil
+	return s.Tray.Len() > 0 || s.sel != nil || s.editor != nil || s.search != nil || s.highlight != nil
 }
 
 // trayHeight is the divider plus one row per card, capped at a third of
@@ -172,14 +172,17 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 			}
 		}
 	}
-	// Toolbar or editor overlay row.
+	// Toolbar, editor, or search overlay row.
 	overlayRow := -1
-	if s.sel != nil || s.editor != nil {
+	if s.sel != nil || s.editor != nil || s.search != nil {
 		overlayRow = s.overlayRowLocked(agentRows)
 		if overlayRow >= 0 && overlayRow < len(base) {
-			if s.editor != nil {
+			switch {
+			case s.editor != nil:
 				base[overlayRow] = s.editorLine()
-			} else {
+			case s.search != nil:
+				base[overlayRow] = s.searchLine()
+			default:
 				base[overlayRow] = s.toolbarLine()
 			}
 		}
@@ -197,6 +200,11 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 
 	if s.editor != nil && overlayRow >= 0 {
 		cx = s.editorCursorCol()
+		cy = s.agentToPhysical(overlayRow)
+		return lines, cx, cy, true
+	}
+	if s.search != nil && overlayRow >= 0 {
+		cx = s.searchCursorCol()
 		cy = s.agentToPhysical(overlayRow)
 		return lines, cx, cy, true
 	}
@@ -379,6 +387,29 @@ func (s *Session) editorLine() screen.Line {
 	return l
 }
 
+// searchLine renders the transcript search field: the query, and a note when
+// the last search found nothing.
+func (s *Session) searchLine() screen.Line {
+	l := s.blankLine()
+	x := putText(&l, 1, "› ", s.dimAttr())
+	x = putText(&l, x, "/"+string(s.search.query), screen.Attr{})
+	if s.search.noMatch {
+		putText(&l, x+2, "no match", s.dimAttr())
+	}
+	return l
+}
+
+func (s *Session) searchCursorCol() int {
+	x := 1 + 2 + 1
+	for _, r := range s.search.query {
+		x += runeWidth(r)
+	}
+	if x >= s.cols {
+		x = s.cols - 1
+	}
+	return x
+}
+
 func (s *Session) editorCursorCol() int {
 	x := 1 + 2 + len(string(s.editor.tag)) + 2
 	for _, r := range s.editor.text {
@@ -394,6 +425,11 @@ func (s *Session) editorCursorCol() int {
 // directly under the selection, else directly above it, else the region's
 // last row.
 func (s *Session) overlayRowLocked(agentRows int) int {
+	// The search field is not tied to a block, so it sits at the foot of the
+	// agent region.
+	if s.search != nil {
+		return agentRows - 1
+	}
 	last, first := -1, -1
 	switch {
 	case s.editor != nil:

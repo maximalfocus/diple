@@ -283,3 +283,33 @@ func TestInputRow(t *testing.T) {
 		t.Fatal("prompt without a rule is the box itself")
 	}
 }
+
+func TestWindowedViewportAlignsTheTurnsItShows(t *testing.T) {
+	a := &Adapter{}
+	for _, mode := range []string{"inline", "fullscreen"} {
+		t.Run(mode, func(t *testing.T) {
+			_, rows, tr := loadFixture(t, mode)
+			shown := tr.Turns[0]
+			// The rows show one turn of a longer conversation, as a
+			// fullscreen viewport scrolled into the middle of it does.
+			windowed := &adapter.Transcript{Agent: tr.Agent, Version: tr.Version, SessionID: tr.SessionID}
+			windowed.Turns = append(windowed.Turns,
+				adapter.Turn{Ordinal: 1, ID: "earlier", Blocks: blocks.Parse("An earlier turn the window does not show.")},
+				adapter.Turn{Ordinal: 2, ID: shown.ID, Blocks: shown.Blocks},
+				adapter.Turn{Ordinal: 3, ID: "later", Blocks: blocks.Parse("A later turn the window does not show.")},
+			)
+			al := a.Align(windowed, rows)
+			if len(al) != 3 {
+				t.Fatalf("alignment = %+v", al)
+			}
+			if !al[1].Aligned || len(al[1].Blocks) != len(shown.Blocks) {
+				t.Fatalf("the shown turn did not align: %+v", al[1])
+			}
+			for _, i := range []int{0, 2} {
+				if al[i].Aligned || len(al[i].Blocks) != 0 {
+					t.Fatalf("turn %d is not on screen but got %+v", al[i].Turn, al[i])
+				}
+			}
+		})
+	}
+}
