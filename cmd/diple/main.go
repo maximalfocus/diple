@@ -18,12 +18,14 @@ import (
 	_ "github.com/maximalfocus/diple/internal/adapter/claude"
 	"github.com/maximalfocus/diple/internal/agent"
 	"github.com/maximalfocus/diple/internal/card"
+	"github.com/maximalfocus/diple/internal/keys"
 	"github.com/maximalfocus/diple/internal/wrap"
 )
 
 const usage = `usage: diple [--record <fixture>] [--plain] [--no-marks] <agent> [args…]
        diple blocks <transcript>
        diple stash|unstash [<agent>]
+       diple bindings
 
 Runs <agent> (for example claude) under Diple. Non-interactive invocations
 (-p/--print, --version, --help) and sessions without a terminal run the real
@@ -36,6 +38,7 @@ agent directly.
   blocks <transcript>  print the turns and blocks detected in a transcript
   stash [<agent>]      set the agent's saved tray aside
   unstash [<agent>]    give the stashed tray back to the next session
+  bindings             print the effective key bindings
 `
 
 func main() {
@@ -78,6 +81,8 @@ func run(args []string) int {
 			return printBlocks(args[1:])
 		case a == "stash" || a == "unstash":
 			return stash(a, args[1:])
+		case a == "bindings":
+			return bindings(args[1:])
 		default:
 			return wrapAgent(a, args[1:], f)
 		}
@@ -111,8 +116,12 @@ func wrapAgent(name string, args []string, f flags) int {
 	}
 
 	ad, _ := adapter.For(argv0)
+	table, complaints := loadBindings()
+	for _, c := range complaints {
+		fmt.Fprintf(os.Stderr, "diple: %s\n", c)
+	}
 	code, err := wrap.Run(wrap.Options{
-		Path: path, Name: argv0, Args: args, Record: f.record, Adapter: ad, Plain: f.plain, NoMarks: f.noMarks, NoArchive: f.noArchive,
+		Path: path, Name: argv0, Args: args, Record: f.record, Adapter: ad, Keys: table, Plain: f.plain, NoMarks: f.noMarks, NoArchive: f.noArchive,
 		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 	})
 	if err != nil {
@@ -122,6 +131,32 @@ func wrapAgent(name string, args []string, f flags) int {
 		}
 	}
 	return code
+}
+
+// bindings implements `diple bindings`: the effective table, defaults and
+// the user's file together, in the file's own syntax.
+func bindings(args []string) int {
+	if len(args) != 0 {
+		fmt.Fprint(os.Stderr, usage)
+		return 64
+	}
+	table, complaints := loadBindings()
+	for _, c := range complaints {
+		fmt.Fprintf(os.Stderr, "diple: %s\n", c)
+	}
+	fmt.Print(table)
+	return 0
+}
+
+// loadBindings reads the user's binding file over the defaults. Its
+// complaints are reported and the session still starts: a config file must
+// never cost the user their terminal.
+func loadBindings() (keys.Table, []string) {
+	path, err := keys.DefaultPath()
+	if err != nil {
+		return keys.Defaults(), []string{fmt.Sprintf("bindings: %v", err)}
+	}
+	return keys.Load(path)
 }
 
 // stash implements `diple stash|unstash [<agent>]`: the tray a session saved

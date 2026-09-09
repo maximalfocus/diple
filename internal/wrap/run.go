@@ -19,6 +19,7 @@ import (
 	"github.com/maximalfocus/diple/internal/adapter"
 	"github.com/maximalfocus/diple/internal/card"
 	"github.com/maximalfocus/diple/internal/fold"
+	"github.com/maximalfocus/diple/internal/keys"
 	"github.com/maximalfocus/diple/internal/record"
 )
 
@@ -34,6 +35,8 @@ type Options struct {
 	Plain bool
 	// NoMarks disables the gutter mark on anchored blocks.
 	NoMarks bool
+	// Keys is the binding table; the zero value means the defaults.
+	Keys keys.Table
 	// NoArchive disables the sent-fold archive.
 	NoArchive bool
 	Stdin     *os.File // the host terminal
@@ -96,6 +99,9 @@ func Run(opts Options) (exitCode int, err error) {
 		if c, _, err := term.GetSize(fd); err == nil {
 			_ = pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(r), Cols: uint16(c)})
 		}
+	}
+	if opts.Keys != nil {
+		session.Keys = opts.Keys
 	}
 	if opts.Adapter != nil {
 		session.UseAdapter(opts.Adapter, opts.Name)

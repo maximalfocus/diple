@@ -432,6 +432,19 @@ func (a *Adapter) Busy(s *screen.Screen) bool {
 	return false
 }
 
+// Prompt reports whether Claude Code is showing one of its own dialogs: a
+// permission question, the model or effort chooser, or the workspace-trust
+// question. Every one of them ends in the same footer offer to cancel, which
+// the working footer ("esc to interrupt") never carries.
+func (a *Adapter) Prompt(s *screen.Screen) bool {
+	for _, row := range s.Text() {
+		if strings.Contains(strings.ToLower(row), "esc to cancel") {
+			return true
+		}
+	}
+	return false
+}
+
 // QueuesWhenBusy is true: Claude Code accepts typed or pasted input while a
 // turn runs and processes it when idle, so Diple sends immediately.
 func (a *Adapter) QueuesWhenBusy() bool { return true }

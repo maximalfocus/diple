@@ -2,6 +2,7 @@ package wrap
 
 import (
 	"github.com/maximalfocus/diple/internal/card"
+	"github.com/maximalfocus/diple/internal/keys"
 )
 
 func (s *Session) clampTraySel() {
@@ -13,45 +14,48 @@ func (s *Session) clampTraySel() {
 	}
 }
 
-// trayKeysLocked handles a key while the tray has focus.
+// trayKeysLocked handles a key while the tray has focus. The tray's own
+// Enter and `p` come from R-009 and are not table entries; everything else
+// is a binding.
 func (s *Session) trayKeysLocked(chunk []byte) {
-	if len(chunk) != 1 {
+	k, ok := keyOf(chunk)
+	if !ok {
 		return
 	}
-	switch chunk[0] {
-	case '+':
+	switch {
+	case s.Keys.Is(keys.TrayNew, k):
 		s.chooser = true
-	case 0x1b, '\t':
+	case s.Keys.Is(keys.Cancel, k), s.Keys.Is(keys.TrayFocus, k):
 		s.focus = focusAgent
-	case 'j':
+	case s.Keys.Is(keys.TrayNext, k):
 		s.traySel++
-	case 'k':
+	case s.Keys.Is(keys.TrayPrev, k):
 		s.traySel--
-	case 'J':
+	case s.Keys.Is(keys.TrayMoveDn, k):
 		if s.Tray.Move(s.traySel, s.traySel+1) {
 			s.traySel++
 			_ = s.saveLocked()
 		}
-	case 'K':
+	case s.Keys.Is(keys.TrayMoveUp, k):
 		if s.Tray.Move(s.traySel, s.traySel-1) {
 			s.traySel--
 			_ = s.saveLocked()
 		}
-	case 'd', 0x7f, 0x08:
+	case s.Keys.Is(keys.TrayDelete, k), k.Rune == 0x7f, k.Rune == 0x08:
 		if s.Tray.Delete(s.traySel) {
 			_ = s.saveLocked()
 		}
 		if s.Tray.Len() == 0 {
 			s.focus = focusAgent
 		}
-	case 'e':
+	case s.Keys.Is(keys.TrayEdit, k):
 		if s.traySel < s.Tray.Len() {
 			c := s.Tray.Cards[s.traySel]
 			s.openEditorLocked(c.Tag, nil, c)
 		}
-	case 's', '\r', '\n':
+	case k.Rune == 's', k.Rune == '\r', k.Rune == '\n':
 		s.setKeyErr(s.requestSendLocked(true))
-	case 'p':
+	case k.Rune == 'p':
 		s.setKeyErr(s.requestSendLocked(false))
 	}
 	s.clampTraySel()

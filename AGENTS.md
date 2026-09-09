@@ -26,6 +26,8 @@ palette; the agent's output is never repainted with different attributes.
   digits only, in order, tolerant of wrapping and decoration.
 - `internal/card` — cards of every kind, anchors, attachments, the tray, and
   its per-session persistence and stash slot under the user's state directory.
+- `internal/keys` — the binding table: every gesture Diple owns, its default
+  key, and the user's `bindings.conf` read over the defaults.
 - `internal/attach` — what an instruction card's attachment refers to: a path
   is only a reference, a command is run once and its output travels with the
   card.
@@ -63,6 +65,24 @@ stays open: a path is compiled as a reference, and a command is run once, then,
 and what it printed travels with the card. `diple stash` sets an agent's saved
 tray aside in one slot and `diple unstash` gives it to that agent's next
 session.
+
+## The keyboard and the agent's own dialogs
+
+Every mouse gesture has a key, and every key is a table entry a user can
+rebind in `$XDG_CONFIG_HOME/diple/bindings.conf`; `diple bindings` prints the
+effective table. A bad line there is reported on stderr and skipped — a config
+file must never cost the user their terminal. `Alt+K` selects the topmost
+block in view, `j`/`k` walk blocks, `L` takes a code line and `V` extends the
+range, `v` opens a span on the block's first word and `w`/`b` and `l`/`h` size
+it by word and by character; the toolbar letters then make the card, exactly
+as they do after a click.
+
+The adapter reports when the agent is showing a dialog of its own — a
+permission question, a chooser, a text question. While one is up Diple owns
+no keys at all: an open editor is put away with its text, the selection,
+search field and chooser are dismissed, focus returns to the native box, and
+the next keypress answers the agent. When the dialog clears the editor comes
+back exactly as it was.
 
 ## Turn navigation and search
 
