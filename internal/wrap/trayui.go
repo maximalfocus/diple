@@ -42,11 +42,15 @@ func (s *Session) trayKeysLocked(chunk []byte) {
 		if s.Tray.Len() == 0 {
 			s.focus = focusAgent
 		}
-	case 'e', '\r', '\n':
+	case 'e':
 		if s.traySel < s.Tray.Len() {
 			c := s.Tray.Cards[s.traySel]
 			s.openEditorLocked(c.Tag, nil, c)
 		}
+	case 's', '\r', '\n':
+		s.sendErr = s.requestSendLocked(true)
+	case 'p':
+		s.sendErr = s.requestSendLocked(false)
 	}
 	s.clampTraySel()
 }

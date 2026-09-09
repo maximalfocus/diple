@@ -378,3 +378,18 @@ func isRule(row string) bool {
 	}
 	return true
 }
+
+// Busy reports whether Claude Code is working: its footer shows an interrupt
+// hint while a turn is in flight.
+func (a *Adapter) Busy(s *screen.Screen) bool {
+	for _, row := range s.Text() {
+		if strings.Contains(row, "esc to interrupt") || strings.Contains(row, "to interrupt)") {
+			return true
+		}
+	}
+	return false
+}
+
+// QueuesWhenBusy is true: Claude Code accepts typed or pasted input while a
+// turn runs and processes it when idle, so Diple sends immediately.
+func (a *Adapter) QueuesWhenBusy() bool { return true }

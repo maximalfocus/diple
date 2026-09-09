@@ -316,6 +316,9 @@ func (s *Session) trayLines() []screen.Line {
 		label += "s"
 	}
 	label += " "
+	if s.pendingSubmit {
+		label = " › will send when idle "
+	}
 	putText(&div, 1, label, s.dimAttr())
 	lines = append(lines, div)
 	visible := s.trayH - 1

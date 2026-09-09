@@ -18,6 +18,7 @@ import (
 
 	"github.com/maximalfocus/diple/internal/adapter"
 	"github.com/maximalfocus/diple/internal/card"
+	"github.com/maximalfocus/diple/internal/fold"
 	"github.com/maximalfocus/diple/internal/record"
 )
 
@@ -33,9 +34,11 @@ type Options struct {
 	Plain bool
 	// NoMarks disables the gutter mark on anchored blocks.
 	NoMarks bool
-	Stdin   *os.File // the host terminal
-	Stdout  *os.File
-	Stderr  *os.File
+	// NoArchive disables the sent-fold archive.
+	NoArchive bool
+	Stdin     *os.File // the host terminal
+	Stdout    *os.File
+	Stderr    *os.File
 }
 
 // drainTimeout bounds how long Run waits for the agent's last bytes after it
@@ -98,6 +101,13 @@ func Run(opts Options) (exitCode int, err error) {
 		session.UseAdapter(opts.Adapter, opts.Name)
 		if st, err := card.DefaultStore(); err == nil {
 			session.UseStore(st)
+		}
+		if !opts.NoArchive {
+			if cwd, err := os.Getwd(); err == nil {
+				if ar, err := fold.NewArchive(cwd, ".diple-archive.md"); err == nil {
+					session.UseArchive(ar)
+				}
+			}
 		}
 		cwd, err := os.Getwd()
 		if err == nil {

@@ -12,8 +12,12 @@ import (
 
 	"github.com/maximalfocus/diple/internal/adapter"
 	"github.com/maximalfocus/diple/internal/card"
+	"github.com/maximalfocus/diple/internal/fold"
 	"github.com/maximalfocus/diple/internal/screen"
 )
+
+// foldArchive is the tray's project-local archive.
+type foldArchive = fold.Archive
 
 // Envelope sequences: Diple's only additions to the output stream while the
 // session is live. They ask the host terminal to report mouse buttons and
@@ -86,6 +90,10 @@ type Session struct {
 	trayScroll int
 	highlight  *rowRange
 	drag       *dragState
+
+	pendingSubmit bool
+	archive       *foldArchive
+	sendErr       error
 }
 
 type focusKind int
@@ -120,6 +128,13 @@ func (s *Session) UseStore(st *card.Store) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.store = st
+}
+
+// UseArchive attaches the sent-fold archive.
+func (s *Session) UseArchive(a *fold.Archive) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.archive = a
 }
 
 // SetSessionID binds the session to its transcript id: a stored tray for
@@ -275,6 +290,9 @@ func (s *Session) HandleOutput(p []byte) error {
 			err = e
 		}
 	}
+	if e := s.deliverPendingLocked(); e != nil && err == nil {
+		err = e
+	}
 	if e := s.syncLocked(); e != nil && err == nil {
 		err = e
 	}
@@ -306,6 +324,22 @@ func (s *Session) HandleInput(p []byte) error {
 			forward = s.keysLocked(forward, p[:i])
 			p = p[i:]
 			continue
+		}
+		if s.editor == nil && s.Tray.Len() > 0 && len(p) >= 2 && p[0] == 0x1b {
+			if p[1] == '\r' || p[1] == '\n' {
+				p = p[2:]
+				if e := s.requestSendLocked(true); e != nil && err == nil {
+					err = e
+				}
+				continue
+			}
+			if p[1] == 'p' {
+				p = p[2:]
+				if e := s.requestSendLocked(false); e != nil && err == nil {
+					err = e
+				}
+				continue
+			}
 		}
 		if ev, n, ok, incomplete := parseSGRMouse(p); ok {
 			p = p[n:]
@@ -344,6 +378,10 @@ func (s *Session) HandleInput(p []byte) error {
 			err = e
 		}
 	}
+	if s.sendErr != nil && err == nil {
+		err = s.sendErr
+	}
+	s.sendErr = nil
 	if e := s.syncLocked(); e != nil && err == nil {
 		err = e
 	}

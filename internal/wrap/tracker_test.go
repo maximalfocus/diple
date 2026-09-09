@@ -44,6 +44,8 @@ func (f *fileAdapter) Mode(*screen.Screen) adapter.Mode                         
 func (f *fileAdapter) Align(*adapter.Transcript, []string) []adapter.TurnAlignment { return nil }
 func (f *fileAdapter) Fallback([]string) []adapter.TurnAlignment                   { return nil }
 func (f *fileAdapter) InputRow([]string) int                                       { return -1 }
+func (f *fileAdapter) Busy(*screen.Screen) bool                                    { return false }
+func (f *fileAdapter) QueuesWhenBusy() bool                                        { return true }
 
 func (f *fileAdapter) count() int {
 	f.mu.Lock()
