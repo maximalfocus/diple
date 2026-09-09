@@ -19,18 +19,24 @@ import (
 // Every adapter aligns this way — the differences between agents live in the
 // decoration facts each one passes in.
 func Assign(t *Transcript, rows []string, rules align.Rules) []TurnAlignment {
-	regions := markerRegions(rows, rules)
+	regions := candidateRegions(rows, rules)
 	claimed := make([]int, len(t.Turns)) // region index per turn, -1 when none
 	spansOf := make([][]align.Span, len(t.Turns))
 	cursor := 0
 	for ti, turn := range t.Turns {
 		claimed[ti] = -1
 		for r := cursor; r < len(regions); r++ {
-			if s, ok := align.Turn(turn.Blocks, rows, regions[r].first, rules); ok {
-				claimed[ti], spansOf[ti] = r, s
-				cursor = r + 1
-				break
+			s, ok := align.Turn(turn.Blocks, rows, regions[r].first, rules)
+			if !ok {
+				continue
 			}
+			claimed[ti], spansOf[ti] = r, s
+			// The next turn starts after the rows this one occupies, not
+			// merely after its opening region: an agent that draws every
+			// paragraph as a candidate would otherwise let the next turn
+			// match inside this one.
+			cursor = nextRegion(regions, r, lastRow(s))
+			break
 		}
 	}
 	for ti := range t.Turns {
@@ -59,6 +65,9 @@ func Assign(t *Transcript, rows []string, rules align.Rules) []TurnAlignment {
 	}
 	out := make([]TurnAlignment, 0, len(t.Turns))
 	for ti, turn := range t.Turns {
+		if turn.Echo {
+			continue // the user's own text holds its place and nothing more
+		}
 		ta := TurnAlignment{Turn: turn.Ordinal, Aligned: spansOf[ti] != nil}
 		switch {
 		case ta.Aligned:
@@ -76,12 +85,44 @@ func Assign(t *Transcript, rows []string, rules align.Rules) []TurnAlignment {
 }
 
 // Paragraphed treats every turn-marker region as a turn of paragraphs, which
-// is what an adapter falls back to with no transcript at all.
+// is what an adapter falls back to with no transcript at all. An agent that
+// does not mark its turns has no regions to divide, so its rows become one
+// turn of paragraphs.
 func Paragraphed(rows []string, rules align.Rules) []TurnAlignment {
+	if rules.TurnMarker == "" {
+		blocks := Paragraphs(rows, 0, len(rows), rules)
+		if len(blocks) == 0 {
+			return nil
+		}
+		return []TurnAlignment{{Turn: 1, Aligned: false, Blocks: blocks}}
+	}
 	var out []TurnAlignment
 	for _, r := range markerRegions(rows, rules) {
 		out = append(out, TurnAlignment{Turn: len(out) + 1, Aligned: false,
 			Blocks: Paragraphs(rows, r.first, r.last, rules)})
+	}
+	return out
+}
+
+// candidateRegions is where a turn may begin. An agent that marks its turns
+// gives one region per marker; an agent that draws them as plain rows — pi
+// does — offers every paragraph start instead, and the turns still take them
+// in order.
+func candidateRegions(rows []string, rules align.Rules) []region {
+	if rules.TurnMarker != "" {
+		return markerRegions(rows, rules)
+	}
+	var out []region
+	blank := true
+	for i, r := range rows {
+		if strings.TrimSpace(r) == "" {
+			blank = true
+			continue
+		}
+		if blank {
+			out = append(out, region{first: i, last: len(rows)})
+		}
+		blank = false
 	}
 	return out
 }
@@ -101,6 +142,28 @@ func Paragraphs(rows []string, from, to int, rules align.Rules) []AlignedBlock {
 		})
 	}
 	return out
+}
+
+// lastRow is the final row a match occupies.
+func lastRow(spans []align.Span) int {
+	last := -1
+	for _, sp := range spans {
+		if sp.Last > last {
+			last = sp.Last
+		}
+	}
+	return last
+}
+
+// nextRegion is the first region that begins after row end, or the one after
+// r when the match occupies no rows at all.
+func nextRegion(regions []region, r, end int) int {
+	for i := r + 1; i < len(regions); i++ {
+		if regions[i].first > end {
+			return i
+		}
+	}
+	return len(regions)
 }
 
 // region is one turn-marker row and the rows up to the next marker or prompt.

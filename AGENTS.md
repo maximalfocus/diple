@@ -19,9 +19,9 @@ palette; the agent's output is never repainted with different attributes.
   transcript tracker.
 - `internal/adapter` — the per-CLI interface (transcript discovery and parsing,
   rendering mode, alignment), the shared turn-to-region matching every adapter
-  aligns with, and the registry; `internal/adapter/claude` and
-  `internal/adapter/codex` are the agent adapters, each with its pinned
-  fixtures under `testdata/<version>/`.
+  aligns with, and the registry; `internal/adapter/claude`,
+  `internal/adapter/codex`, and `internal/adapter/pi` are the agent adapters,
+  each with its pinned fixtures under `testdata/<version>/`.
 - `internal/blocks` — Markdown to blocks: paragraphs, headings, list items, code
   blocks and lines, diff lines, table rows, tool calls.
 - `internal/align` — matching a turn's blocks to rendered rows by letters and
@@ -77,8 +77,13 @@ An adapter is the only place an agent's own facts live: where its transcript
 is and how it parses, the rendering mode, how a turn's blocks line up with
 rows, where its input box starts, when it is busy, and when it is asking a
 question of its own. Alignment itself is shared — `adapter.Assign` matches
-turns to the turn-marker regions the rows actually carry — so an adapter
-passes its decoration facts and nothing more. A transcript that is missing or
+turns to candidate regions in order and steps past the rows each match
+occupies — so an adapter passes its decoration facts and nothing more. An
+agent that marks its turns gives one candidate per marker; pi marks nothing,
+so every paragraph start is a candidate, its rendered code fences are stepped
+over, and the prompt it echoes above a reply joins the alignment as an echo:
+it holds its place in the order, which is what keeps the reply from matching
+the echo, and it is never something to annotate. A transcript that is missing or
 unreadable is never an error: the paragraph fallback keeps annotation working,
 which matters for the Codex CLI, whose 0.153.4 keeps a running session's
 thread in its own state database and writes the rollout file Diple parses only

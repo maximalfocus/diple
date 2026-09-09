@@ -26,6 +26,10 @@ type Rules struct {
 	// MaxResync bounds how many rows may be skipped after a tool call
 	// before the next block must appear.
 	MaxResync int
+	// Fence is the marker a renderer draws around a code block when it
+	// prints the fence itself, as pi does. Those rows belong to no block,
+	// so matching steps over them.
+	Fence string
 }
 
 // Span is a block's first and last row index.
@@ -75,7 +79,7 @@ func Turn(bs []blocks.Block, rows []string, start int, rules Rules) ([]Span, boo
 		if b.Kind == blocks.ToolCall {
 			// A tool call renders as one row that begins with the tool name
 			// and is followed by result rows the transcript does not carry.
-			pos = skipBlank(norm, pos)
+			pos = skipNoise(norm, rows, pos, rules)
 			if pos >= len(rows) || !strings.HasPrefix(norm[pos], Normalize(toolName(b.Text))) {
 				return spans, false
 			}
@@ -102,7 +106,7 @@ func Turn(bs []blocks.Block, rows []string, start int, rules Rules) ([]Span, boo
 			}
 			afterTool = false
 		} else {
-			first = skipBlank(norm, first)
+			first = skipNoise(norm, rows, first, rules)
 		}
 		acc := ""
 		last := -1
@@ -153,6 +157,23 @@ func Turn(bs []blocks.Block, rows []string, start int, rules Rules) ([]Span, boo
 func skipBlank(norm []string, pos int) int {
 	for pos < len(norm) && norm[pos] == "" {
 		pos++
+	}
+	return pos
+}
+
+// skipNoise steps over the rows that belong to no block: blank ones, and the
+// fence rows a renderer draws around a code block.
+func skipNoise(norm []string, rows []string, pos int, rules Rules) int {
+	for pos < len(rows) {
+		if norm[pos] == "" {
+			pos++
+			continue
+		}
+		if rules.Fence != "" && strings.HasPrefix(strings.TrimSpace(rows[pos]), rules.Fence) {
+			pos++
+			continue
+		}
+		return pos
 	}
 	return pos
 }
