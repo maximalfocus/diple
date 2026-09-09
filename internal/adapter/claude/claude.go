@@ -264,63 +264,105 @@ func (a *Adapter) Mode(s *screen.Screen) adapter.Mode {
 	return adapter.ModeInline
 }
 
-// Align maps each turn onto rows. Turns are matched in order, each from
-// the first turn-marker row after the previous turn where its blocks fit;
-// a turn that fits nowhere falls back to one paragraph per rendered
-// paragraph over the region up to the next prompt marker.
+// Align maps each turn onto rows. The rows may be the whole history or only
+// the window a fullscreen viewport shows, so turns are matched to the
+// turn-marker regions on screen rather than assumed to start at the top: each
+// turn takes, in order, the first region after the previous turn's where its
+// blocks fit. A turn that fits nowhere but sits between two matched turns
+// still gets that region as one paragraph per rendered paragraph, which is
+// what a stale or corrupt transcript leaves; a turn the window does not show
+// gets no rows at all.
 func (a *Adapter) Align(t *adapter.Transcript, rows []string) []adapter.TurnAlignment {
-	var out []adapter.TurnAlignment
-	pos := 0
-	for _, turn := range t.Turns {
-		aligned := false
-		var spans []align.Span
-		firstMarker := -1
-		for i := pos; i < len(rows); i++ {
-			if !strings.HasPrefix(rows[i], TurnMarker) {
-				continue
-			}
-			if firstMarker < 0 {
-				firstMarker = i
-			}
-			if s, ok := align.Turn(turn.Blocks, rows, i, rules); ok {
-				spans, aligned = s, true
+	regions := markerRegions(rows)
+	claimed := make([]int, len(t.Turns)) // region index per turn, -1 when none
+	spansOf := make([][]align.Span, len(t.Turns))
+	cursor := 0
+	for ti, turn := range t.Turns {
+		claimed[ti] = -1
+		for r := cursor; r < len(regions); r++ {
+			if s, ok := align.Turn(turn.Blocks, rows, regions[r].first, rules); ok {
+				claimed[ti], spansOf[ti] = r, s
+				cursor = r + 1
 				break
 			}
 		}
-		ta := adapter.TurnAlignment{Turn: turn.Ordinal, Aligned: aligned}
-		if aligned {
-			last := pos
+	}
+	// A turn that matched nothing takes an unclaimed region between its
+	// matched neighbours, so a turn the transcript no longer describes is
+	// still annotatable at paragraph granularity.
+	for ti := range t.Turns {
+		if claimed[ti] >= 0 {
+			continue
+		}
+		lo, hi := 0, len(regions)
+		for pi := ti - 1; pi >= 0; pi-- {
+			if claimed[pi] >= 0 {
+				lo = claimed[pi] + 1
+				break
+			}
+		}
+		for ni := ti + 1; ni < len(t.Turns); ni++ {
+			if claimed[ni] >= 0 {
+				hi = claimed[ni]
+				break
+			}
+		}
+		for r := lo; r < hi; r++ {
+			if !claimedRegion(claimed, r) {
+				claimed[ti] = r
+				break
+			}
+		}
+	}
+	out := make([]adapter.TurnAlignment, 0, len(t.Turns))
+	for ti, turn := range t.Turns {
+		ta := adapter.TurnAlignment{Turn: turn.Ordinal, Aligned: spansOf[ti] != nil}
+		switch {
+		case ta.Aligned:
 			for i, b := range turn.Blocks {
-				ta.Blocks = append(ta.Blocks, adapter.AlignedBlock{Block: b, Span: adapter.Span{First: spans[i].First, Last: spans[i].Last}})
-				if spans[i].Last > last {
-					last = spans[i].Last
-				}
+				ta.Blocks = append(ta.Blocks, adapter.AlignedBlock{Block: b,
+					Span: adapter.Span{First: spansOf[ti][i].First, Last: spansOf[ti][i].Last}})
 			}
-			pos = last + 1
-		} else {
-			from := firstMarker
-			if from < 0 {
-				from = pos
-			}
-			to := regionEnd(rows, from+1)
-			ta.Blocks = paragraphs(rows, from, to)
-			pos = to
+		case claimed[ti] >= 0:
+			r := regions[claimed[ti]]
+			ta.Blocks = paragraphs(rows, r.first, r.last)
 		}
 		out = append(out, ta)
 	}
 	return out
 }
 
-// Fallback treats every turn-marker region as a turn of paragraphs.
-func (a *Adapter) Fallback(rows []string) []adapter.TurnAlignment {
-	var out []adapter.TurnAlignment
+// region is one turn-marker row and the rows up to the next marker or prompt.
+type region struct{ first, last int }
+
+func markerRegions(rows []string) []region {
+	var out []region
 	for i := 0; i < len(rows); i++ {
 		if !strings.HasPrefix(rows[i], TurnMarker) {
 			continue
 		}
 		to := regionEnd(rows, i+1)
-		out = append(out, adapter.TurnAlignment{Turn: len(out) + 1, Aligned: false, Blocks: paragraphs(rows, i, to)})
+		out = append(out, region{first: i, last: to})
 		i = to - 1
+	}
+	return out
+}
+
+func claimedRegion(claimed []int, r int) bool {
+	for _, c := range claimed {
+		if c == r {
+			return true
+		}
+	}
+	return false
+}
+
+// Fallback treats every turn-marker region as a turn of paragraphs.
+func (a *Adapter) Fallback(rows []string) []adapter.TurnAlignment {
+	var out []adapter.TurnAlignment
+	for _, r := range markerRegions(rows) {
+		out = append(out, adapter.TurnAlignment{Turn: len(out) + 1, Aligned: false,
+			Blocks: paragraphs(rows, r.first, r.last)})
 	}
 	return out
 }

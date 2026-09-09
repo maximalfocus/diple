@@ -15,7 +15,8 @@ palette; the agent's output is never repainted with different attributes.
   scrollback, alternate screen, and re-emission of rows.
 - `internal/record` — session fixture recording and replay.
 - `internal/wrap` — the session: PTY forwarding, wheel-owned scrollback, input
-  filtering, terminal restore, and the transcript tracker.
+  filtering, turn navigation and transcript search, terminal restore, and the
+  transcript tracker.
 - `internal/adapter` — the per-CLI interface (transcript discovery and parsing,
   rendering mode, alignment) and its registry; `internal/adapter/claude` is the
   Claude Code adapter with its pinned fixtures under `testdata/<version>/`.
@@ -29,8 +30,8 @@ palette; the agent's output is never repainted with different attributes.
 ## Pass-through and composited
 
 The session forwards the agent's bytes untouched while Diple owns nothing on
-screen. As soon as a selection, toolbar, editor, highlight, or a non-empty
-tray shows, it composites: the wrapped process is told `rows − tray height`,
+screen. As soon as a selection, toolbar, editor, search field,
+highlight, or a non-empty tray shows, it composites: the wrapped process is told `rows − tray height`,
 the physical screen is built from the screen model with the tray inserted
 above the agent's input box, and only rows that changed are repainted. When
 the last Diple-owned thing disappears the live screen is repainted from the
@@ -45,6 +46,21 @@ history) or fullscreen (alternate screen with its own viewport and mouse
 tracking, the agent viewport is the history). Claude Code's `tui: fullscreen`
 setting selects the latter. Every adapter reports the mode from the screen
 model, and alignment runs against whichever history the mode provides.
+
+## Turn navigation and search
+
+`[` and `]` move the history view between assistant turns and `/` opens a
+transient one-line field that searches the transcript. All three are Diple's
+gestures only while Diple already owns navigation — the viewport is scrolled
+off live, a block selection is open, or the tray has focus — and reach the
+agent unchanged otherwise, so a slash command still starts with `/` and the
+native box keeps every key it had. Inline, a jump scrolls Diple's own
+scrollback. Fullscreen, the agent owns its viewport: Diple forwards wheel
+notches and re-aligns whatever becomes visible until the turn shows or the
+viewport stops moving, and an agent that never asked for mouse reports simply
+cannot be scrolled. Alignment therefore matches turns to the turn-marker
+regions the rows actually contain, so a viewport showing the middle of a
+conversation aligns the turns it shows and leaves the rest without rows.
 
 ## Rules
 

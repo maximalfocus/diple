@@ -85,6 +85,8 @@ type Session struct {
 	trayH      int
 	sel        *selection
 	editor     *editor
+	search     *searchField
+	nav        *navRequest
 	focus      focusKind
 	traySel    int
 	trayScroll int
@@ -93,7 +95,9 @@ type Session struct {
 
 	pendingSubmit bool
 	archive       *foldArchive
-	sendErr       error
+	// keyErr carries an error raised while handling a key Diple consumed,
+	// which has no return path of its own.
+	keyErr error
 }
 
 type focusKind int
@@ -290,6 +294,9 @@ func (s *Session) HandleOutput(p []byte) error {
 			err = e
 		}
 	}
+	if e := s.driveNavLocked(); e != nil && err == nil {
+		err = e
+	}
 	if e := s.deliverPendingLocked(); e != nil && err == nil {
 		err = e
 	}
@@ -325,7 +332,7 @@ func (s *Session) HandleInput(p []byte) error {
 			p = p[i:]
 			continue
 		}
-		if s.editor == nil && s.Tray.Len() > 0 && len(p) >= 2 && p[0] == 0x1b {
+		if s.editor == nil && s.search == nil && s.Tray.Len() > 0 && len(p) >= 2 && p[0] == 0x1b {
 			if p[1] == '\r' || p[1] == '\n' {
 				p = p[2:]
 				if e := s.requestSendLocked(true); e != nil && err == nil {
@@ -378,10 +385,10 @@ func (s *Session) HandleInput(p []byte) error {
 			err = e
 		}
 	}
-	if s.sendErr != nil && err == nil {
-		err = s.sendErr
+	if s.keyErr != nil && err == nil {
+		err = s.keyErr
 	}
-	s.sendErr = nil
+	s.keyErr = nil
 	if e := s.syncLocked(); e != nil && err == nil {
 		err = e
 	}
@@ -392,10 +399,30 @@ func (s *Session) HandleInput(p []byte) error {
 // the tray, or the agent.
 func (s *Session) keysLocked(forward, chunk []byte) []byte {
 	s.highlight = nil
-	switch {
-	case s.editor != nil:
+	if s.editor != nil {
 		s.editorKeysLocked(chunk)
 		return forward
+	}
+	if s.search != nil {
+		s.setKeyErr(s.searchKeysLocked(chunk))
+		return forward
+	}
+	// Any other key ends a jump the agent has not finished scrolling.
+	s.nav = nil
+	if len(chunk) == 1 && s.navOwnedLocked() {
+		switch chunk[0] {
+		case '[':
+			s.setKeyErr(s.jumpTurnLocked(-1))
+			return forward
+		case ']':
+			s.setKeyErr(s.jumpTurnLocked(1))
+			return forward
+		case '/':
+			s.openSearchLocked()
+			return forward
+		}
+	}
+	switch {
 	case s.sel != nil:
 		if s.toolbarKeyLocked(chunk) {
 			return forward

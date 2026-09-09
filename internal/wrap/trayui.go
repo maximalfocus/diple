@@ -48,11 +48,19 @@ func (s *Session) trayKeysLocked(chunk []byte) {
 			s.openEditorLocked(c.Tag, nil, c)
 		}
 	case 's', '\r', '\n':
-		s.sendErr = s.requestSendLocked(true)
+		s.setKeyErr(s.requestSendLocked(true))
 	case 'p':
-		s.sendErr = s.requestSendLocked(false)
+		s.setKeyErr(s.requestSendLocked(false))
 	}
 	s.clampTraySel()
+}
+
+// setKeyErr keeps the first error raised while handling a consumed key, for
+// HandleInput to return.
+func (s *Session) setKeyErr(err error) {
+	if err != nil && s.keyErr == nil {
+		s.keyErr = err
+	}
 }
 
 // showAnchorLocked scrolls so a card's anchor is visible and highlights it
@@ -63,6 +71,13 @@ func (s *Session) showAnchorLocked(c *card.Card) {
 		return
 	}
 	s.highlight = &rowRange{first: first, last: last}
+	s.ensureVisibleLocked(first, last)
+}
+
+// ensureVisibleLocked scrolls Diple's scrollback the least it can so rows
+// first..last are inside the agent region. The alternate screen belongs to
+// the agent, so nothing is scrolled there.
+func (s *Session) ensureVisibleLocked(first, last int) {
 	if s.Model.AltActive() {
 		return
 	}
@@ -89,6 +104,7 @@ func (s *Session) mouseLocked(ev mouseEvent, forward *[]byte) error {
 	tracking := s.Model.MouseTracking()
 
 	if ev.isWheel() {
+		s.nav = nil
 		if tracking && s.Model.AltActive() {
 			*forward = append(*forward, encodeSGRMouse(ev)...)
 			return nil
