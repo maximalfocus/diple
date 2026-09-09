@@ -17,6 +17,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/maximalfocus/diple/internal/adapter"
+	"github.com/maximalfocus/diple/internal/card"
 	"github.com/maximalfocus/diple/internal/record"
 )
 
@@ -28,6 +29,10 @@ type Options struct {
 	Record string   // fixture path, or "" for none
 	// Adapter, when set, follows the session transcript.
 	Adapter adapter.Adapter
+	// Plain restricts Diple's drawing to reverse and underline.
+	Plain bool
+	// NoMarks disables the gutter mark on anchored blocks.
+	NoMarks bool
 	Stdin   *os.File // the host terminal
 	Stdout  *os.File
 	Stderr  *os.File
@@ -82,12 +87,25 @@ func Run(opts Options) (exitCode int, err error) {
 	defer restore()
 
 	session := NewSession(opts.Stdout, ptmx, cols, rows, rec)
+	session.Plain = opts.Plain
+	session.Marks = !opts.NoMarks
+	session.SetPTYRows = func(r int) {
+		if c, _, err := term.GetSize(fd); err == nil {
+			_ = pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(r), Cols: uint16(c)})
+		}
+	}
 	if opts.Adapter != nil {
+		session.UseAdapter(opts.Adapter, opts.Name)
+		if st, err := card.DefaultStore(); err == nil {
+			session.UseStore(st)
+		}
 		cwd, err := os.Getwd()
 		if err == nil {
-			onFound := func(string) {}
-			if rec != nil {
-				onFound = rec.Transcript
+			onFound := func(id string) {
+				if rec != nil {
+					rec.Transcript(id)
+				}
+				_ = session.SetSessionID(id)
 			}
 			session.Tracker = NewTracker(opts.Adapter, cwd, onFound)
 			session.Tracker.Start()
@@ -148,8 +166,8 @@ func Run(opts Options) (exitCode int, err error) {
 			switch sig {
 			case syscall.SIGWINCH:
 				if c, r, err := term.GetSize(fd); err == nil {
-					_ = pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(r), Cols: uint16(c)})
 					_ = session.Resize(c, r)
+					_ = pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(session.AgentRows()), Cols: uint16(c)})
 				}
 			default:
 				if s, ok := sig.(syscall.Signal); ok && cmd.Process != nil {

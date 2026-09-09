@@ -1,7 +1,8 @@
 // Package wrap runs one agent session: it forwards the agent's output to the
 // host terminal and the user's input to the agent, keeps the screen model
-// current, and owns the mouse wheel so the user can scroll Diple's scrollback
-// while the agent keeps running.
+// current, owns the mouse wheel so the user can scroll Diple's scrollback
+// while the agent keeps running, and, once the user points at a block,
+// draws the selection, toolbar, editor, and tray over a composited screen.
 package wrap
 
 import (
@@ -9,15 +10,17 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/maximalfocus/diple/internal/adapter"
+	"github.com/maximalfocus/diple/internal/card"
 	"github.com/maximalfocus/diple/internal/screen"
 )
 
 // Envelope sequences: Diple's only additions to the output stream while the
-// session is live. They ask the host terminal to report mouse buttons in the
-// SGR encoding so Diple can own the wheel.
+// session is live. They ask the host terminal to report mouse buttons and
+// drags in the SGR encoding so Diple can own the wheel and see gestures.
 const (
-	EnvelopeStart = "\x1b[?1000h\x1b[?1006h"
-	EnvelopeEnd   = "\x1b[?1006l\x1b[?1000l"
+	EnvelopeStart = "\x1b[?1002h\x1b[?1006h"
+	EnvelopeEnd   = "\x1b[?1006l\x1b[?1002l"
 )
 
 // WheelLines is how many rows one wheel notch scrolls.
@@ -32,7 +35,14 @@ type Recorder interface {
 	Transcript(sessionID string)
 }
 
-// Session is the live/scrolled state machine between an agent and a terminal.
+// TranscriptSource provides the latest parsed transcript.
+type TranscriptSource interface {
+	Transcript() (*adapter.Transcript, error)
+}
+
+// Session is the state machine between an agent and a terminal. It is
+// pass-through while it owns nothing on screen, and composited once a
+// selection, overlay, or tray is showing.
 type Session struct {
 	mu sync.Mutex
 
@@ -42,20 +52,120 @@ type Session struct {
 	rec   Recorder
 	// Tracker follows the session transcript when an adapter is known.
 	Tracker *Tracker
+	// Source overrides Tracker as the transcript provider, for tests.
+	Source TranscriptSource
 
-	cols, rows int
+	adapter   adapter.Adapter
+	agentName string
+	sessionID string
+	store     *card.Store
+	// Tray is the session's cards.
+	Tray *card.Tray
+	// Plain restricts Diple's drawing to reverse and underline.
+	Plain bool
+	// Marks enables the gutter mark on anchored blocks.
+	Marks bool
+	// SetPTYRows, when set, is called with the row count the wrapped
+	// process should see whenever the tray changes height.
+	SetPTYRows func(rows int)
+
+	cols, rows int // physical terminal size
 	back       int // rows scrolled up from live; 0 is live
-	scrolledAt uint64
-	pending    []byte // incomplete mouse report waiting for its tail
+	pending    []byte
 
-	agentMouseReset bool // the agent reset a mouse mode in the last chunk
+	agentMouseReset bool
+
+	// Composited state.
+	composited bool
+	painted    []screen.Line
+	trayH      int
+	sel        *selection
+	editor     *editor
+	focus      focusKind
+	traySel    int
+	trayScroll int
+	highlight  *rowRange
+	drag       *dragState
+}
+
+type focusKind int
+
+const (
+	focusAgent focusKind = iota
+	focusTray
+)
+
+type rowRange struct {
+	first, last int // history rows
 }
 
 // NewSession wires a terminal and an agent writer to a fresh model.
 func NewSession(term, agent io.Writer, cols, rows int, rec Recorder) *Session {
-	s := &Session{term: term, agent: agent, Model: screen.New(cols, rows), rec: rec, cols: cols, rows: rows}
+	s := &Session{term: term, agent: agent, Model: screen.New(cols, rows), rec: rec, cols: cols, rows: rows,
+		Tray: &card.Tray{}, Marks: true}
 	s.Model.OnMode = s.onMode
 	return s
+}
+
+// UseAdapter attaches the adapter that knows the agent's rendering.
+func (s *Session) UseAdapter(a adapter.Adapter, agentName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.adapter = a
+	s.agentName = agentName
+}
+
+// UseStore attaches tray persistence.
+func (s *Session) UseStore(st *card.Store) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.store = st
+}
+
+// SetSessionID binds the session to its transcript id: a stored tray for
+// that session is restored, and cards made before discovery are kept.
+func (s *Session) SetSessionID(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionID = id
+	if s.store != nil && id != "" {
+		stored, err := s.store.Load(s.agentName, id)
+		if err != nil {
+			return err
+		}
+		if stored.Len() > 0 {
+			for _, c := range s.Tray.Cards {
+				stored.Add(c)
+			}
+			s.Tray = stored
+		}
+	}
+	err := s.saveLocked()
+	if e := s.syncLocked(); e != nil && err == nil {
+		err = e
+	}
+	return err
+}
+
+func (s *Session) saveLocked() error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.Save(s.agentName, s.sessionID, s.Tray)
+}
+
+func (s *Session) transcript() *adapter.Transcript {
+	var src TranscriptSource
+	if s.Source != nil {
+		src = s.Source
+	} else if s.Tracker != nil {
+		src = s.Tracker
+	}
+	if src == nil {
+		return nil
+	}
+	tr, _ := src.Transcript()
+	return tr
 }
 
 func (s *Session) onMode(mode int, set bool) {
@@ -68,19 +178,24 @@ func (s *Session) onMode(mode int, set bool) {
 	}
 }
 
-// Start emits the envelope that lets Diple see the wheel.
+// Start emits the envelope that lets Diple see the mouse.
 func (s *Session) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return writeAll(s.term, []byte(EnvelopeStart))
 }
 
-// Stop returns the terminal to live if needed and emits the closing envelope.
+// Stop returns the terminal to the agent's live state and emits the
+// closing envelope.
 func (s *Session) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var first error
-	if s.back != 0 {
+	if s.composited {
+		s.sel, s.editor, s.highlight, s.drag = nil, nil, nil, nil
+		s.composited, s.painted = false, nil
+		first = s.returnToLiveLocked()
+	} else if s.back != 0 {
 		first = s.returnToLiveLocked()
 	}
 	if err := writeAll(s.term, []byte(EnvelopeEnd)); err != nil && first == nil {
@@ -102,6 +217,14 @@ func (s *Session) HistoryRows() []string {
 	return append(rows, s.Model.Text()...)
 }
 
+// AgentRows returns the row count the wrapped process is given: the
+// terminal's rows less the tray.
+func (s *Session) AgentRows() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rows - s.trayH
+}
+
 // Scrolled reports whether the viewport shows scrollback rather than live.
 func (s *Session) Scrolled() bool {
 	s.mu.Lock()
@@ -109,10 +232,19 @@ func (s *Session) Scrolled() bool {
 	return s.back != 0
 }
 
-// HandleOutput takes one chunk from the agent. While live it is forwarded to
-// the terminal unmodified before the model is updated, so forwarding never
-// waits on parsing. While scrolled it only updates the model, and the
-// viewport is re-anchored so the rows on screen stay put.
+// Composited reports whether Diple owns the screen painting.
+func (s *Session) Composited() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.composited
+}
+
+// HandleOutput takes one chunk from the agent. While pass-through and live
+// it is forwarded to the terminal unmodified before the model is updated,
+// so forwarding never waits on parsing. While scrolled it only updates the
+// model, re-anchoring the viewport so the rows on screen stay put. While
+// composited the model is updated and only the rows that changed are
+// repainted.
 func (s *Session) HandleOutput(p []byte) error {
 	if s.rec != nil {
 		s.rec.Output(p)
@@ -120,44 +252,41 @@ func (s *Session) HandleOutput(p []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var err error
-	if s.back == 0 {
+	if s.back == 0 && !s.composited {
 		err = writeAll(s.term, p)
 	}
 	before := s.Model.ScrolledOff()
 	s.agentMouseReset = false
 	_, _ = s.Model.Write(p)
 	if s.back != 0 {
-		// Rows that scrolled off the top pushed our anchor further up.
 		s.back += int(s.Model.ScrolledOff() - before)
 		if s.back > s.Model.HistoryLen() {
 			s.back = s.Model.HistoryLen()
 		}
 		if s.Model.AltActive() {
-			// The agent switched screens under us; scrollback is meaningless
-			// on the alternate screen, so fall back to live and forward.
+			// Scrollback is meaningless on the alternate screen.
 			if e := s.returnToLiveLocked(); e != nil && err == nil {
 				err = e
 			}
 		}
-	} else if s.agentMouseReset {
-		// The agent turned mouse reporting off; Diple still needs the wheel.
+	}
+	if s.agentMouseReset {
 		if e := writeAll(s.term, []byte(EnvelopeStart)); e != nil && err == nil {
 			err = e
 		}
 	}
+	if e := s.syncLocked(); e != nil && err == nil {
+		err = e
+	}
 	return err
 }
 
-// HandleInput takes one chunk from the user. Wheel reports drive Diple's
-// scrollback; while scrolled, End returns to live and any other key snaps to
-// live first, matching what terminals do; everything else goes to the agent
-// unchanged. Mouse reports that are not the wheel reach the agent only when
-// it asked for mouse tracking, since an agent that did not would read them as
-// keystrokes.
+// HandleInput takes one chunk from the user. Diple's own gestures and, while
+// the editor or tray has focus, keys are consumed; everything else goes to
+// the agent unchanged. Mouse reports that are not Diple's reach the agent
+// only when it asked for mouse tracking, with rows mapped past the tray.
 func (s *Session) HandleInput(p []byte) error {
 	if s.rec != nil {
-		// The fixture keeps what the user typed, including the gestures
-		// Diple consumes, so a replay can drive the same session.
 		s.rec.Input(p)
 	}
 	s.mu.Lock()
@@ -174,7 +303,8 @@ func (s *Session) HandleInput(p []byte) error {
 			for i < len(p) && p[i] != 0x1b {
 				i++
 			}
-			forward, p = s.keys(forward, p[:i]), p[i:]
+			forward = s.keysLocked(forward, p[:i])
+			p = p[i:]
 			continue
 		}
 		if ev, n, ok, incomplete := parseSGRMouse(p); ok {
@@ -183,23 +313,26 @@ func (s *Session) HandleInput(p []byte) error {
 				err = e
 			}
 			continue
-		} else if incomplete {
+		} else if incomplete && len(p) >= 2 {
+			// A partial mouse report waits for its tail; a bare ESC is a
+			// key press and is delivered at once.
 			s.pending = append([]byte(nil), p...)
 			break
 		}
-		if n, ok := parseEndKey(p); ok && s.back != 0 {
+		if n, ok := parseEndKey(p); ok && s.back != 0 && s.editor == nil && s.focus == focusAgent {
 			p = p[n:]
 			if e := s.returnToLiveLocked(); e != nil && err == nil {
 				err = e
 			}
 			continue
 		}
-		// Any other escape sequence or a bare ESC: forward up to the next ESC.
+		// Any other escape sequence or a bare ESC: one unit up to the next ESC.
 		i := 1
 		for i < len(p) && p[i] != 0x1b {
 			i++
 		}
-		forward, p = s.keys(forward, p[:i]), p[i:]
+		forward = s.keysLocked(forward, p[:i])
+		p = p[i:]
 	}
 	if len(forward) > 0 {
 		if s.back != 0 {
@@ -211,28 +344,36 @@ func (s *Session) HandleInput(p []byte) error {
 			err = e
 		}
 	}
+	if e := s.syncLocked(); e != nil && err == nil {
+		err = e
+	}
 	return err
 }
 
-func (s *Session) keys(forward, chunk []byte) []byte {
+// keysLocked routes one unit of keyboard input: to the editor, the toolbar,
+// the tray, or the agent.
+func (s *Session) keysLocked(forward, chunk []byte) []byte {
+	s.highlight = nil
+	switch {
+	case s.editor != nil:
+		s.editorKeysLocked(chunk)
+		return forward
+	case s.sel != nil:
+		if s.toolbarKeyLocked(chunk) {
+			return forward
+		}
+		s.sel = nil
+		return append(forward, chunk...)
+	case s.focus == focusTray:
+		s.trayKeysLocked(chunk)
+		return forward
+	}
+	if len(chunk) == 1 && chunk[0] == '\t' && s.Tray.Len() > 0 {
+		s.focus = focusTray
+		s.clampTraySel()
+		return forward
+	}
 	return append(forward, chunk...)
-}
-
-func (s *Session) mouseLocked(ev mouseEvent, forward *[]byte) error {
-	tracking := s.Model.MouseTracking()
-	if ev.isWheel() && !(tracking && s.Model.AltActive()) {
-		if ev.release {
-			return nil
-		}
-		if ev.wheelUp() {
-			return s.scrollLocked(WheelLines)
-		}
-		return s.scrollLocked(-WheelLines)
-	}
-	if tracking {
-		*forward = append(*forward, encodeSGRMouse(ev)...)
-	}
-	return nil
 }
 
 func encodeSGRMouse(ev mouseEvent) []byte {
@@ -251,7 +392,10 @@ func encodeSGRMouse(ev mouseEvent) []byte {
 func (s *Session) Scroll(delta int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.scrollLocked(delta)
+	if err := s.scrollLocked(delta); err != nil {
+		return err
+	}
+	return s.syncLocked()
 }
 
 func (s *Session) scrollLocked(delta int) error {
@@ -262,6 +406,9 @@ func (s *Session) scrollLocked(delta int) error {
 	if h := s.Model.HistoryLen(); target > h {
 		target = h
 	}
+	if s.Model.AltActive() {
+		target = 0
+	}
 	if target == s.back {
 		return nil
 	}
@@ -269,6 +416,9 @@ func (s *Session) scrollLocked(delta int) error {
 		return s.returnToLiveLocked()
 	}
 	s.back = target
+	if s.composited {
+		return nil // syncLocked repaints
+	}
 	return s.paintViewportLocked()
 }
 
@@ -279,10 +429,13 @@ func (s *Session) ReturnToLive() error {
 	if s.back == 0 {
 		return nil
 	}
-	return s.returnToLiveLocked()
+	if err := s.returnToLiveLocked(); err != nil {
+		return err
+	}
+	return s.syncLocked()
 }
 
-// Resize records a new terminal size in the model and repaints if scrolled.
+// Resize records a new terminal size in the model and repaints if needed.
 func (s *Session) Resize(cols, rows int) error {
 	if s.rec != nil {
 		s.rec.Resize(cols, rows)
@@ -290,54 +443,74 @@ func (s *Session) Resize(cols, rows int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cols, s.rows = cols, rows
-	s.Model.Resize(cols, rows)
-	if s.back == 0 {
-		return nil
-	}
+	s.Model.Resize(cols, rows-s.trayH)
 	if s.back > s.Model.HistoryLen() {
 		s.back = s.Model.HistoryLen()
+	}
+	s.painted = nil
+	if s.composited {
+		return s.syncLocked()
+	}
+	if s.back == 0 {
+		return nil
 	}
 	return s.paintViewportLocked()
 }
 
-// paintViewportLocked redraws the whole terminal from scrollback. Every row
-// is emitted with its original attributes and the cursor is hidden, since it
-// belongs to the live screen.
+// paintViewportLocked redraws the whole terminal from scrollback in
+// pass-through mode. Every row is emitted with its original attributes and
+// the cursor is hidden, since it belongs to the live screen.
 func (s *Session) paintViewportLocked() error {
 	rows := s.Model.Viewport(s.back)
 	buf := make([]byte, 0, 64*len(rows)*s.cols)
 	buf = append(buf, "\x1b[?25l"...)
 	for i, l := range rows {
-		buf = append(buf, "\x1b["...)
-		buf = append(buf, strconv.Itoa(i+1)...)
-		buf = append(buf, ";1H"...)
-		buf = l.AppendEmit(buf)
+		buf = appendRowAt(buf, i, l)
 	}
 	return writeAll(s.term, buf)
 }
 
 // returnToLiveLocked repaints the live screen from the model and restores
 // the terminal state the agent expects: cursor position, visibility, style,
-// current attribute, and the modes it may have changed while scrolled.
+// current attribute, and the modes it may have changed meanwhile.
 func (s *Session) returnToLiveLocked() error {
 	s.back = 0
+	if s.composited {
+		s.painted = nil
+		return nil // syncLocked repaints
+	}
 	m := s.Model
 	rows := m.Rows()
 	buf := make([]byte, 0, 64*len(rows)*s.cols)
 	buf = append(buf, "\x1b[?25l"...)
 	for i, l := range rows {
-		buf = append(buf, "\x1b["...)
-		buf = append(buf, strconv.Itoa(i+1)...)
-		buf = append(buf, ";1H"...)
-		buf = l.AppendEmit(buf)
+		buf = appendRowAt(buf, i, l)
 	}
 	x, y := m.Cursor()
+	buf = appendCursor(buf, x, y)
+	buf = append(buf, m.Attr().SGR()...)
+	buf = appendModes(buf, m)
+	return writeAll(s.term, buf)
+}
+
+func appendRowAt(buf []byte, row int, l screen.Line) []byte {
+	buf = append(buf, "\x1b["...)
+	buf = append(buf, strconv.Itoa(row+1)...)
+	buf = append(buf, ";1H"...)
+	return l.AppendEmit(buf)
+}
+
+func appendCursor(buf []byte, x, y int) []byte {
 	buf = append(buf, "\x1b["...)
 	buf = append(buf, strconv.Itoa(y+1)...)
 	buf = append(buf, ';')
 	buf = append(buf, strconv.Itoa(x+1)...)
-	buf = append(buf, 'H')
-	buf = append(buf, m.Attr().SGR()...)
+	return append(buf, 'H')
+}
+
+// appendModes re-asserts the agent's DEC modes and cursor state, then
+// Diple's own envelope, which must survive whatever the agent set.
+func appendModes(buf []byte, m *screen.Screen) []byte {
 	for _, mode := range []int{screen.ModeAppCursorKeys, screen.ModeBracketedPaste, screen.ModeMouseNormal,
 		screen.ModeMouseButton, screen.ModeMouseAny, screen.ModeMouseSGR, screen.ModeMouseFocus} {
 		if m.Mode(mode) {
@@ -346,7 +519,6 @@ func (s *Session) returnToLiveLocked() error {
 			buf = append(buf, 'h')
 		}
 	}
-	// Diple's own envelope must survive whatever the agent set.
 	buf = append(buf, EnvelopeStart...)
 	if st := m.CursorStyle(); st != 0 {
 		buf = append(buf, "\x1b["...)
@@ -356,7 +528,7 @@ func (s *Session) returnToLiveLocked() error {
 	if m.CursorVisible() {
 		buf = append(buf, "\x1b[?25h"...)
 	}
-	return writeAll(s.term, buf)
+	return buf
 }
 
 func writeAll(w io.Writer, p []byte) error {

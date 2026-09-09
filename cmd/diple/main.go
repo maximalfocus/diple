@@ -20,7 +20,7 @@ import (
 	"github.com/maximalfocus/diple/internal/wrap"
 )
 
-const usage = `usage: diple [--record <fixture>] <agent> [args…]
+const usage = `usage: diple [--record <fixture>] [--plain] [--no-marks] <agent> [args…]
        diple blocks <transcript>
 
 Runs <agent> (for example claude) under Diple. Non-interactive invocations
@@ -28,6 +28,8 @@ Runs <agent> (for example claude) under Diple. Non-interactive invocations
 agent directly.
 
   --record <fixture>   write the session as a fixture for replay
+  --plain              draw only with reverse and underline
+  --no-marks           no gutter mark on annotated blocks
   blocks <transcript>  print the turns and blocks detected in a transcript
 `
 
@@ -35,19 +37,29 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+type flags struct {
+	record  string
+	plain   bool
+	noMarks bool
+}
+
 func run(args []string) int {
-	recordPath := ""
+	var f flags
 	for len(args) > 0 {
 		a := args[0]
 		switch {
+		case a == "--plain":
+			f.plain, args = true, args[1:]
+		case a == "--no-marks":
+			f.noMarks, args = true, args[1:]
 		case a == "--record":
 			if len(args) < 2 {
 				fmt.Fprint(os.Stderr, usage)
 				return 64
 			}
-			recordPath, args = args[1], args[2:]
+			f.record, args = args[1], args[2:]
 		case strings.HasPrefix(a, "--record="):
-			recordPath, args = strings.TrimPrefix(a, "--record="), args[1:]
+			f.record, args = strings.TrimPrefix(a, "--record="), args[1:]
 		case a == "-h" || a == "--help":
 			fmt.Fprint(os.Stdout, usage)
 			return 0
@@ -57,14 +69,14 @@ func run(args []string) int {
 		case a == "blocks":
 			return printBlocks(args[1:])
 		default:
-			return wrapAgent(a, args[1:], recordPath)
+			return wrapAgent(a, args[1:], f)
 		}
 	}
 	fmt.Fprint(os.Stderr, usage)
 	return 64
 }
 
-func wrapAgent(name string, args []string, recordPath string) int {
+func wrapAgent(name string, args []string, f flags) int {
 	self, _ := os.Executable()
 	path, err := agent.Locate(name, os.Getenv("PATH"), "", self)
 	if err != nil {
@@ -90,7 +102,7 @@ func wrapAgent(name string, args []string, recordPath string) int {
 
 	ad, _ := adapter.For(argv0)
 	code, err := wrap.Run(wrap.Options{
-		Path: path, Name: argv0, Args: args, Record: recordPath, Adapter: ad,
+		Path: path, Name: argv0, Args: args, Record: f.record, Adapter: ad, Plain: f.plain, NoMarks: f.noMarks,
 		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 	})
 	if err != nil {

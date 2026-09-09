@@ -23,6 +23,20 @@ palette; the agent's output is never repainted with different attributes.
   blocks and lines, diff lines, table rows, tool calls.
 - `internal/align` — matching a turn's blocks to rendered rows by letters and
   digits only, in order, tolerant of wrapping and decoration.
+- `internal/card` — cards, anchors, the tray, and its per-session persistence
+  under the user's state directory.
+
+## Pass-through and composited
+
+The session forwards the agent's bytes untouched while Diple owns nothing on
+screen. As soon as a selection, toolbar, editor, highlight, or a non-empty
+tray shows, it composites: the wrapped process is told `rows − tray height`,
+the physical screen is built from the screen model with the tray inserted
+above the agent's input box, and only rows that changed are repainted. When
+the last Diple-owned thing disappears the live screen is repainted from the
+model and the agent's cursor, attribute, and modes are restored. Diple draws
+only with the default colours, the 16 indexed colours, and bold, dim,
+reverse, and underline; `--plain` keeps reverse and underline only.
 
 ## Rendering modes
 
