@@ -29,9 +29,14 @@ const (
 
 // Turn is one assistant message as recorded in the transcript.
 type Turn struct {
-	Ordinal int // 1-based among assistant turns
+	Ordinal int // 1-based among assistant turns; 0 for an echo
 	ID      string
 	Blocks  []blocks.Block
+	// Echo marks text the agent draws in the same shape as a reply but that
+	// the user wrote — pi echoes a prompt that way. It takes its place in
+	// the order so a reply is not mistaken for it, and it is never offered
+	// as something to annotate.
+	Echo bool
 }
 
 // Transcript is a parsed session transcript.
