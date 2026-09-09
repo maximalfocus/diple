@@ -100,6 +100,9 @@ type Adapter interface {
 	Align(t *Transcript, rows []string) []TurnAlignment
 	// Fallback splits rows into paragraph blocks with no transcript at all.
 	Fallback(rows []string) []TurnAlignment
+	// InputRow returns the index of the row where the native input box
+	// begins within the visible screen rows, or -1 when it is not shown.
+	InputRow(screenRows []string) int
 }
 
 var (

@@ -348,3 +348,33 @@ func paragraphs(rows []string, from, to int) []adapter.AlignedBlock {
 	}
 	return out
 }
+
+// InputRow finds Claude Code's input box on the visible screen: the last
+// row that begins with the prompt marker, together with the rule row drawn
+// directly above it when there is one.
+func (a *Adapter) InputRow(screenRows []string) int {
+	for i := len(screenRows) - 1; i >= 0; i-- {
+		if !strings.HasPrefix(screenRows[i], PromptMarker) {
+			continue
+		}
+		if i > 0 && isRule(screenRows[i-1]) {
+			return i - 1
+		}
+		return i
+	}
+	return -1
+}
+
+// isRule reports a horizontal rule row: only box-drawing dashes.
+func isRule(row string) bool {
+	row = strings.TrimSpace(row)
+	if row == "" {
+		return false
+	}
+	for _, r := range row {
+		if r != '─' && r != '━' && r != '-' {
+			return false
+		}
+	}
+	return true
+}

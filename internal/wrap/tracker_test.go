@@ -43,6 +43,7 @@ func (f *fileAdapter) Parse(r io.Reader) (*adapter.Transcript, error) {
 func (f *fileAdapter) Mode(*screen.Screen) adapter.Mode                            { return adapter.ModeInline }
 func (f *fileAdapter) Align(*adapter.Transcript, []string) []adapter.TurnAlignment { return nil }
 func (f *fileAdapter) Fallback([]string) []adapter.TurnAlignment                   { return nil }
+func (f *fileAdapter) InputRow([]string) int                                       { return -1 }
 
 func (f *fileAdapter) count() int {
 	f.mu.Lock()

@@ -265,3 +265,21 @@ func TestRegistered(t *testing.T) {
 		t.Fatalf("registry = %v %v", a, ok)
 	}
 }
+
+func TestInputRow(t *testing.T) {
+	a := &Adapter{}
+	for _, mode := range []string{"inline", "fullscreen"} {
+		s, _, _ := loadFixture(t, mode)
+		rows := s.Text()
+		got := a.InputRow(rows)
+		if got < 0 || !strings.HasPrefix(rows[got+1], PromptMarker) || !isRule(rows[got]) {
+			t.Fatalf("%s: input row = %d (%q)", mode, got, rows[max(got, 0)])
+		}
+	}
+	if a.InputRow([]string{"nothing", "here"}) != -1 {
+		t.Fatal("no prompt must give -1")
+	}
+	if a.InputRow([]string{"❯ typed"}) != 0 {
+		t.Fatal("prompt without a rule is the box itself")
+	}
+}

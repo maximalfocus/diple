@@ -60,6 +60,16 @@ func TestLiveOutputIsByteIdentical(t *testing.T) {
 	}
 }
 
+func TestBareEscapeIsDeliveredAtOnce(t *testing.T) {
+	s, _, agent := newTestSession(40, 6)
+	if err := s.HandleInput([]byte("\x1b")); err != nil {
+		t.Fatal(err)
+	}
+	if agent.String() != "\x1b" {
+		t.Fatalf("agent got %q", agent.String())
+	}
+}
+
 func TestKeysForwardedUnchangedWhileLive(t *testing.T) {
 	s, _, agent := newTestSession(40, 6)
 	in := []byte("hello\x1b[A\x1b\x1b[F\x03")
