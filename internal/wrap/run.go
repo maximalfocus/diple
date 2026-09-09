@@ -111,6 +111,7 @@ func Run(opts Options) (exitCode int, err error) {
 		}
 		cwd, err := os.Getwd()
 		if err == nil {
+			session.UseDir(cwd)
 			onFound := func(id string) {
 				if rec != nil {
 					rec.Transcript(id)

@@ -81,3 +81,44 @@ func TestArchiveAppendsAndRefusesEscape(t *testing.T) {
 		t.Fatalf("a subdirectory path is fine: %v", err)
 	}
 }
+
+func TestCompileFreeCardsAttachmentsAndOverall(t *testing.T) {
+	cards := []*card.Card{
+		{Kind: card.Note, Tag: "fix", Text: "tighten this", Anchor: card.Anchor{Turn: 2, Kind: blocks.Paragraph, Quote: "That is the whole plan."}},
+		{Kind: card.Question, Text: "Which ports does it listen on?"},
+		{Kind: card.Instruction, Text: "Rebase onto main first.", Attachments: []card.Attachment{
+			{Kind: card.PathAttachment, Spec: "src/auth.ts"},
+			{Kind: card.CommandAttachment, Spec: "git diff --stat", Output: " auth.ts | 3 +-\n 1 file changed"},
+		}},
+		{Kind: card.Overall, Text: "Keep the diff small."},
+	}
+	got := Compile(cards, 2)
+	want := "Review (3 items).\n" + `
+1. [fix] > "That is the whole plan."
+   tighten this
+2. [question] Which ports does it listen on?
+3. [instruction] Rebase onto main first.
+   attached: @src/auth.ts
+   attached: git diff --stat
+   ` + "```" + `
+    auth.ts | 3 +-
+    1 file changed
+   ` + "```" + `
+
+Overall: Keep the diff small.`
+	if got != want {
+		t.Fatalf("compiled:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestCompileFailedCaptureAndTruncation(t *testing.T) {
+	cards := []*card.Card{
+		{Kind: card.Instruction, Text: "look at this", Attachments: []card.Attachment{
+			{Kind: card.CommandAttachment, Spec: "false", Output: "boom", Status: 1, Truncated: true},
+		}},
+	}
+	got := Compile(cards, 1)
+	if !strings.Contains(got, "attached: false (exit 1)") || !strings.Contains(got, "… output truncated") {
+		t.Fatalf("compiled:\n%s", got)
+	}
+}

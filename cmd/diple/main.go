@@ -17,11 +17,13 @@ import (
 	"github.com/maximalfocus/diple/internal/adapter"
 	_ "github.com/maximalfocus/diple/internal/adapter/claude"
 	"github.com/maximalfocus/diple/internal/agent"
+	"github.com/maximalfocus/diple/internal/card"
 	"github.com/maximalfocus/diple/internal/wrap"
 )
 
 const usage = `usage: diple [--record <fixture>] [--plain] [--no-marks] <agent> [args…]
        diple blocks <transcript>
+       diple stash|unstash [<agent>]
 
 Runs <agent> (for example claude) under Diple. Non-interactive invocations
 (-p/--print, --version, --help) and sessions without a terminal run the real
@@ -32,6 +34,8 @@ agent directly.
   --no-marks           no gutter mark on annotated blocks
   --no-archive         do not archive sent folds
   blocks <transcript>  print the turns and blocks detected in a transcript
+  stash [<agent>]      set the agent's saved tray aside
+  unstash [<agent>]    give the stashed tray back to the next session
 `
 
 func main() {
@@ -72,6 +76,8 @@ func run(args []string) int {
 			return 64
 		case a == "blocks":
 			return printBlocks(args[1:])
+		case a == "stash" || a == "unstash":
+			return stash(a, args[1:])
 		default:
 			return wrapAgent(a, args[1:], f)
 		}
@@ -116,6 +122,50 @@ func wrapAgent(name string, args []string, f flags) int {
 		}
 	}
 	return code
+}
+
+// stash implements `diple stash|unstash [<agent>]`: the tray a session saved
+// is set aside in the agent's one stash slot, and unstashing gives it to the
+// agent's next session when it binds its transcript.
+func stash(op string, args []string) int {
+	agent := "claude"
+	switch len(args) {
+	case 0:
+	case 1:
+		agent = args[0]
+	default:
+		fmt.Fprint(os.Stderr, usage)
+		return 64
+	}
+	if _, ok := adapter.For(agent); !ok {
+		fmt.Fprintf(os.Stderr, "diple: no adapter for %s; known: %s\n", agent, strings.Join(adapter.Names(), ", "))
+		return 64
+	}
+	st, err := card.DefaultStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "diple: %v\n", err)
+		return 1
+	}
+	var n int
+	if op == "stash" {
+		n, err = st.Stash(agent)
+	} else {
+		n, err = st.Unstash(agent)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "diple: %v\n", err)
+		return 1
+	}
+	noun := "cards"
+	if n == 1 {
+		noun = "card"
+	}
+	if n == 0 {
+		fmt.Printf("nothing to %s for %s\n", op, agent)
+		return 0
+	}
+	fmt.Printf("%sed %d %s for %s\n", op, n, noun, agent)
+	return 0
 }
 
 // printBlocks implements `diple blocks <transcript>`: the turns and blocks
