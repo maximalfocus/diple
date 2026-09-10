@@ -22,7 +22,8 @@ type Action string
 const (
 	Send        Action = "send"           // compile the tray and submit it
 	Paste       Action = "paste"          // compile the tray without submitting
-	FreeCard    Action = "free-card"      // offer the free card kinds
+	FreeCard    Action = "free-card"      // write a free card
+	OverallCard Action = "overall-card"   // write the tray's closing remark
 	Search      Action = "search"         // search the transcript
 	NextTurn    Action = "next-turn"      // move the view to the next turn
 	PrevTurn    Action = "prev-turn"      // move the view to the previous turn
@@ -31,6 +32,7 @@ const (
 	PrevBlock   Action = "prev-block"     // select the previous block or code line
 	SelectLine  Action = "select-line"    // select a code or diff line
 	ExtendLine  Action = "extend-line"    // extend a line range
+	Copy        Action = "copy"           // copy the selection to the clipboard
 	Span        Action = "span"           // start a span inside the block
 	ExtendChar  Action = "extend-char"    // grow the span by a character
 	ShrinkChar  Action = "shrink-char"    // shrink the span by a character
@@ -43,18 +45,34 @@ const (
 	TrayMoveDn  Action = "tray-move-down" // reorder the card down
 	TrayEdit    Action = "tray-edit"      // edit the selected card
 	TrayDelete  Action = "tray-delete"    // delete the selected card
-	TrayNew     Action = "tray-new"       // offer the free card kinds from the tray
+	TrayNew     Action = "tray-new"       // write a free card from the tray
 	Hide        Action = "hide"           // hide the layer for the rest of the session
 	Cancel      Action = "cancel"         // dismiss what Diple is showing
+	// The tag chips, which answer both on a raised block, as the strip's own
+	// letters, and inside the editor, where they move the strip's underline.
+	TagNote Action = "tag-note"
+	TagFix  Action = "tag-fix"
+	TagAsk  Action = "tag-ask"
 )
+
+// TagActions maps each tag chip action to the tag it chooses, in strip order.
+var TagActions = []struct {
+	Action Action
+	Tag    string
+}{
+	{TagNote, "note"},
+	{TagFix, "fix"},
+	{TagAsk, "ask"},
+}
 
 // Actions lists every action in table order.
 var Actions = []Action{
-	Send, Paste, FreeCard, Search, NextTurn, PrevTurn,
-	SelectBlock, NextBlock, PrevBlock, SelectLine, ExtendLine,
+	Send, Paste, FreeCard, OverallCard, Search, NextTurn, PrevTurn,
+	SelectBlock, NextBlock, PrevBlock, SelectLine, ExtendLine, Copy,
 	Span, ExtendChar, ShrinkChar, ExtendWord, ShrinkWord,
 	TrayFocus, TrayNext, TrayPrev, TrayMoveUp, TrayMoveDn, TrayEdit, TrayDelete, TrayNew,
 	Hide, Cancel,
+	TagNote, TagFix, TagAsk,
 }
 
 // Key is one binding: a rune, or a named key, with or without Alt. Alt is
@@ -122,6 +140,7 @@ func Defaults() Table {
 		Send:        {Rune: '\r', Alt: true},
 		Paste:       {Rune: 'p', Alt: true},
 		FreeCard:    {Rune: 'n', Alt: true},
+		OverallCard: {Rune: 'o', Alt: true},
 		SelectBlock: {Rune: 'k', Alt: true},
 		Search:      {Rune: '/'},
 		NextTurn:    {Rune: ']'},
@@ -130,6 +149,7 @@ func Defaults() Table {
 		PrevBlock:   {Rune: 'k'},
 		SelectLine:  {Rune: 'L'},
 		ExtendLine:  {Rune: 'V'},
+		Copy:        {Rune: 'c'},
 		Span:        {Rune: 'v'},
 		ExtendChar:  {Rune: 'l'},
 		ShrinkChar:  {Rune: 'h'},
@@ -145,6 +165,11 @@ func Defaults() Table {
 		TrayNew:     {Rune: '+'},
 		Hide:        {Rune: 'h', Alt: true},
 		Cancel:      {Rune: 0x1b},
+		// The strip's own four letters answer a raised block without moving
+		// the pointer at all: n, f and a are the tags and c is copy.
+		TagNote: {Rune: 'n'},
+		TagFix:  {Rune: 'f'},
+		TagAsk:  {Rune: 'a'},
 	}
 }
 

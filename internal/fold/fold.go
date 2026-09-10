@@ -11,68 +11,102 @@ import (
 	"strings"
 	"time"
 
+	"github.com/maximalfocus/diple/internal/blocks"
 	"github.com/maximalfocus/diple/internal/card"
 )
 
 // Compile turns the ordered cards into one message. latestTurn is the newest
 // assistant turn ordinal, used to phrase a reference to an earlier turn. The
-// overall card is the tray's closing remark, so it is not one of the
-// numbered items and always comes last.
+// overall card is the tray's closing remark, so it is not one of the numbered
+// items and always comes last.
+//
+// Nothing announces the message: the first card's own shape says what this
+// is, and the last number says how many there are. A tray of one card
+// compiles to that card alone, with no number in front of it, because a
+// numbered list of one item is a list only in form.
 func Compile(cards []*card.Card, latestTurn int) string {
 	var numbered []*card.Card
 	var overall *card.Card
 	for _, c := range cards {
-		if c.Kind == card.Overall {
+		if c.Overall {
 			overall = c
 			continue
 		}
 		numbered = append(numbered, c)
 	}
 	var b strings.Builder
-	noun := "items"
-	if len(numbered) == 1 {
-		noun = "item"
-	}
-	fmt.Fprintf(&b, "Review (%d %s).\n", len(numbered), noun)
 	for i, c := range numbered {
-		b.WriteByte('\n')
-		b.WriteString(strconv.Itoa(i + 1))
-		b.WriteString(". [")
-		b.WriteString(label(c))
-		b.WriteString("] ")
-		b.WriteString(reference(c, latestTurn))
-		// A note quotes what it points at, so its own text follows on the
-		// next line; a free card is its text and has nothing to quote.
-		if note := strings.TrimSpace(c.Text); note != "" && c.Kind == card.Note {
-			b.WriteString("\n   ")
-			b.WriteString(note)
+		if i > 0 {
+			b.WriteByte('\n')
 		}
-		writeAttachments(&b, c)
+		indent := ""
+		if len(numbered) > 1 {
+			b.WriteString(strconv.Itoa(i + 1))
+			b.WriteString(". ")
+			indent = "   "
+		}
+		writeCard(&b, c, latestTurn, indent)
 	}
 	if overall != nil {
 		if text := strings.TrimSpace(overall.Text); text != "" {
-			b.WriteString("\n\nOverall: ")
+			if len(numbered) > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString("Overall: ")
 			b.WriteString(text)
 		}
 	}
 	return b.String()
 }
 
-// label is what the entry's brackets carry: a note's tag, and otherwise the
-// card's own kind.
-func label(c *card.Card) string {
-	if c.Kind == card.Note {
-		return string(c.Tag)
+// writeCard writes one entry. An anchored card leads with its tag and what it
+// points at, and its own words follow underneath; a free card is its text and
+// has neither tag nor anchor.
+func writeCard(b *strings.Builder, c *card.Card, latestTurn int, indent string) {
+	if c.Kind == card.Anchored {
+		b.WriteByte('[')
+		b.WriteString(string(c.Tag))
+		b.WriteString("] ")
+		b.WriteString(reference(c, latestTurn))
+		if note := strings.TrimSpace(c.Text); note != "" {
+			b.WriteByte('\n')
+			b.WriteString(indent)
+			b.WriteString(indentLines(note, indent))
+		}
+		writeAttachments(b, c, indent)
+		return
 	}
-	return string(c.Kind)
+	text := strings.TrimSpace(c.Text)
+	if c.Fenced {
+		b.WriteString("```\n")
+		for _, line := range strings.Split(text, "\n") {
+			b.WriteString(indent)
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+		b.WriteString(indent)
+		b.WriteString("```")
+	} else {
+		b.WriteString(indentLines(text, indent))
+	}
+	writeAttachments(b, c, indent)
 }
 
-// writeAttachments names each attachment under its instruction, and puts a
+// indentLines keeps a card's later lines under the first one, so a card that
+// holds more than one line still reads as one entry.
+func indentLines(text, indent string) string {
+	if indent == "" || !strings.Contains(text, "\n") {
+		return text
+	}
+	return strings.ReplaceAll(text, "\n", "\n"+indent)
+}
+
+// writeAttachments names each attachment under its card, and puts a
 // captured command's output in a fenced block so the agent reads it as
 // output rather than prose.
-func writeAttachments(b *strings.Builder, c *card.Card) {
+func writeAttachments(b *strings.Builder, c *card.Card, indent string) {
 	for _, a := range c.Attachments {
-		b.WriteString("\n   attached: ")
+		b.WriteString("\n" + indent + "attached: ")
 		if a.Kind == card.PathAttachment {
 			b.WriteString("@")
 			b.WriteString(a.Spec)
@@ -82,23 +116,20 @@ func writeAttachments(b *strings.Builder, c *card.Card) {
 		if a.Status != 0 {
 			fmt.Fprintf(b, " (exit %d)", a.Status)
 		}
-		b.WriteString("\n   ```\n")
+		b.WriteString("\n" + indent + "```\n")
 		for _, line := range strings.Split(a.Output, "\n") {
-			b.WriteString("   ")
+			b.WriteString(indent)
 			b.WriteString(line)
 			b.WriteByte('\n')
 		}
 		if a.Truncated {
-			b.WriteString("   … output truncated\n")
+			b.WriteString(indent + "… output truncated\n")
 		}
-		b.WriteString("   ```")
+		b.WriteString(indent + "```")
 	}
 }
 
 func reference(c *card.Card, latestTurn int) string {
-	if c.Kind != card.Note {
-		return strings.TrimSpace(c.Text)
-	}
 	prefix := ""
 	if t := c.Anchor.Turn; t > 0 && latestTurn > t {
 		n := latestTurn - t
@@ -108,8 +139,17 @@ func reference(c *card.Card, latestTurn int) string {
 		}
 		prefix = fmt.Sprintf("In your reply %d %s ago: ", n, unit)
 	}
+	// The anchor says what it points at, independently of the tag: a path and
+	// line range where the diff named one, a list ordinal on a list item, and
+	// otherwise the quotation.
+	if p := c.Anchor.Path; p != "" && c.Anchor.LineFirst > 0 {
+		if c.Anchor.LineLast > c.Anchor.LineFirst {
+			return fmt.Sprintf("%s%s:%d-%d", prefix, p, c.Anchor.LineFirst, c.Anchor.LineLast)
+		}
+		return fmt.Sprintf("%s%s:%d", prefix, p, c.Anchor.LineFirst)
+	}
 	quote := c.Anchor.Quote
-	if c.Tag == "prefer" && c.Anchor.Ordinal > 0 {
+	if c.Anchor.Ordinal > 0 && c.Anchor.Kind == blocks.ListItem {
 		return fmt.Sprintf("%sOption %d of the list starting %q.", prefix, c.Anchor.Ordinal, quote)
 	}
 	return fmt.Sprintf("%s> %q", prefix, quote)

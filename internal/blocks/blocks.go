@@ -254,3 +254,73 @@ func listItem(line string) (marker, text string, ok bool) {
 	}
 	return "", "", false
 }
+
+// DiffLocation reports the file and the new-file line number that line n of a
+// diff body belongs to. A unified diff names its file in a `+++ b/path`
+// header and its line numbers in each `@@` hunk header; a body carrying
+// neither has no location, and an anchor there keeps its quotation instead.
+func DiffLocation(body string, n int) (path string, line int, ok bool) {
+	lines := strings.Split(body, "\n")
+	if n < 0 || n >= len(lines) {
+		return "", 0, false
+	}
+	next := 0
+	for i, l := range lines {
+		switch {
+		case strings.HasPrefix(l, "+++ "):
+			path, next = strings.TrimSpace(strings.TrimPrefix(l, "+++ ")), 0
+			path = stripDiffPrefix(path)
+		case strings.HasPrefix(l, "@@"):
+			if start, found := hunkStart(l); found {
+				next = start
+			}
+		}
+		if i != n {
+			// Only context and added lines occupy a line of the new file.
+			if next > 0 && (strings.HasPrefix(l, " ") || strings.HasPrefix(l, "+")) && !strings.HasPrefix(l, "+++ ") {
+				next++
+			}
+			continue
+		}
+		if path == "" || next <= 0 {
+			return "", 0, false
+		}
+		if !strings.HasPrefix(l, " ") && !strings.HasPrefix(l, "+") {
+			// A removed line has no line of its own in the new file; it reads
+			// as the position it was removed from.
+			return path, next, true
+		}
+		return path, next, true
+	}
+	return "", 0, false
+}
+
+// stripDiffPrefix drops the a/ or b/ git prepends to a diff header path, and
+// the timestamp a plain unified diff may append.
+func stripDiffPrefix(p string) string {
+	if i := strings.IndexAny(p, "\t"); i >= 0 {
+		p = p[:i]
+	}
+	for _, prefix := range []string{"a/", "b/"} {
+		if strings.HasPrefix(p, prefix) {
+			return p[len(prefix):]
+		}
+	}
+	return p
+}
+
+// hunkStart reads the new-file start line of an `@@ -a,b +c,d @@` header.
+func hunkStart(l string) (int, bool) {
+	i := strings.Index(l, "+")
+	if i < 0 {
+		return 0, false
+	}
+	n, digits := 0, 0
+	for j := i + 1; j < len(l) && l[j] >= '0' && l[j] <= '9'; j++ {
+		n, digits = n*10+int(l[j]-'0'), digits+1
+	}
+	if digits == 0 {
+		return 0, false
+	}
+	return n, true
+}

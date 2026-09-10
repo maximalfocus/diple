@@ -38,19 +38,17 @@ func (b *busyAdapter) QueuesWhenBusy() bool                                     
 
 func threeCardTray() *card.Tray {
 	tr := &card.Tray{}
-	tr.Add(&card.Card{Kind: card.Note, Tag: "fix", Text: "tighten this", Anchor: card.Anchor{Turn: 1, Kind: blocks.Paragraph, Quote: "That is the whole plan."}})
-	tr.Add(&card.Card{Kind: card.Note, Tag: "prefer", Text: "pick this", Anchor: card.Anchor{Turn: 1, Kind: blocks.ListItem, Ordinal: 2, Quote: "Change the handler"}})
-	tr.Add(&card.Card{Kind: card.Note, Tag: "reject", Text: "wrong status", Anchor: card.Anchor{Turn: 1, Kind: blocks.CodeLine, Quote: "func handle() {}"}})
+	tr.Add(&card.Card{Kind: card.Anchored, Tag: "fix", Text: "tighten this", Anchor: card.Anchor{Turn: 1, Kind: blocks.Paragraph, Quote: "That is the whole plan."}})
+	tr.Add(&card.Card{Kind: card.Anchored, Tag: "note", Text: "pick this", Anchor: card.Anchor{Turn: 1, Kind: blocks.ListItem, Ordinal: 2, Quote: "Change the handler"}})
+	tr.Add(&card.Card{Kind: card.Anchored, Tag: "ask", Text: "wrong status", Anchor: card.Anchor{Turn: 1, Kind: blocks.CodeLine, Quote: "func handle() {}"}})
 	return tr
 }
 
-const wantFold = `Review (3 items).
-
-1. [fix] > "That is the whole plan."
+const wantFold = `1. [fix] > "That is the whole plan."
    tighten this
-2. [prefer] Option 2 of the list starting "Change the handler".
+2. [note] Option 2 of the list starting "Change the handler".
    pick this
-3. [reject] > "func handle() {}"
+3. [ask] > "func handle() {}"
    wrong status`
 
 func TestSendGestureDeliversExactFoldAndEmpties(t *testing.T) {
@@ -170,5 +168,89 @@ func TestSendGestureForwardedWhenTrayEmpty(t *testing.T) {
 	}
 	if agent.String() != "\x1b\r" {
 		t.Fatalf("empty-tray Alt+Enter must reach the agent: %q", agent.String())
+	}
+}
+
+// TestAltEnterInsideTheEditorSavesTheCardThenFolds: a single note costs one
+// keystroke rather than two.
+func TestAltEnterInsideTheEditorSavesTheCardThenFolds(t *testing.T) {
+	s, _, agent := fixtureSession(t, "inline")
+	para := rowOf(t, s, "That is the whole plan.")
+	dwellOn(t, s, 6, yOf(s, para))
+	pressRaised(t, s, blockLeft(s), yOf(s, para))
+	send(t, s, "tighten this")
+	agent.Reset()
+	send(t, s, "\x1b\r")
+	got := agent.String()
+	want := pasteStart + `[note] > "That is the whole plan."` + "\ntighten this" + pasteEnd + "\r"
+	if got != want {
+		t.Fatalf("fold:\n got %q\nwant %q", got, want)
+	}
+	if s.Tray.Len() != 0 || s.editor != nil {
+		t.Fatalf("after the fold: tray=%d editor=%v", s.Tray.Len(), s.editor)
+	}
+}
+
+// TestPressOnTheStatusLineSendSends: a product that is pointed at needs a way
+// to send that is pointed at too.
+func TestPressOnTheStatusLineSendSends(t *testing.T) {
+	s, _, agent := newTestSession(80, 24)
+	s.Tray = threeCardTray()
+	s.mu.Lock()
+	if err := s.syncLocked(); err != nil {
+		s.mu.Unlock()
+		t.Fatal(err)
+	}
+	from, _ := s.sendHit()
+	divider := s.inputRow()
+	s.mu.Unlock()
+	agent.Reset()
+	send(t, s, pressAt(from+2, divider+1)+releaseAt(from+2, divider+1))
+	want := pasteStart + wantFold + pasteEnd + "\r"
+	if agent.String() != want {
+		t.Fatalf("the status line's send:\n got %q\nwant %q", agent.String(), want)
+	}
+	if s.Tray.Len() != 0 {
+		t.Fatalf("tray not emptied: %d", s.Tray.Len())
+	}
+}
+
+// TestPasteFollowsFocus is R-010: the native box keeps every paste while it
+// has focus, an open editor takes it into its text, and a paste onto a focused
+// tray becomes one free card.
+func TestPasteFollowsFocus(t *testing.T) {
+	s, _, agent := newTestSession(80, 24)
+	// With focus on the native box, a paste reaches the agent unchanged.
+	send(t, s, pasteStart+"hello there"+pasteEnd)
+	if agent.String() != pasteStart+"hello there"+pasteEnd {
+		t.Fatalf("agent got %q", agent.String())
+	}
+	// Into an open editor it lands in the text, and a pasted newline never
+	// submits anything.
+	send(t, s, "\x1bn")
+	agent.Reset()
+	send(t, s, pasteStart+"first\nsecond"+pasteEnd)
+	if s.editor == nil || string(s.editor.text) != "first\nsecond" {
+		t.Fatalf("editor text = %q", string(s.editor.text))
+	}
+	if agent.Len() != 0 {
+		t.Fatalf("the paste reached the agent: %q", agent.Bytes())
+	}
+	send(t, s, "\r")
+	if s.Tray.Len() != 1 || s.focus != focusTray {
+		t.Fatalf("tray = %d focus = %v", s.Tray.Len(), s.focus)
+	}
+	// Onto a focused tray with no editor open it becomes one free card, and
+	// a card of several lines compiles fenced.
+	send(t, s, pasteStart+"log line one\nlog line two\n"+pasteEnd)
+	if s.Tray.Len() != 2 {
+		t.Fatalf("tray = %d, want a card from the paste", s.Tray.Len())
+	}
+	c := s.Tray.Cards[1]
+	if c.Kind != card.Free || c.Text != "log line one\nlog line two" || !c.Fenced {
+		t.Fatalf("pasted card = %+v", c)
+	}
+	if !strings.Contains(fold.Compile(s.Tray.Cards, 1), "```\n   log line one") {
+		t.Fatalf("a multi-line paste must compile fenced:\n%s", fold.Compile(s.Tray.Cards, 1))
 	}
 }

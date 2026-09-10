@@ -3,7 +3,7 @@
 # Diple gesture into it where R-014 calls the host driven, and checks the
 # capture. Run it from the repository root:
 #
-#   scripts/verify-hosts.sh [--plain] [host...]
+#   scripts/verify-hosts.sh [--plain] [--manual] [host...]
 #
 # With no host arguments it does every host it can start on this machine and
 # says which ones it skipped, so the release checklist can record both. A host
@@ -22,19 +22,31 @@ trap 'rm -rf "$ctl"' EXIT
 diple="$out/diple"
 agent="$root/scripts/fake-agent.sh"
 plain=""
-if [ "${1:-}" = "--plain" ]; then
-	plain="--plain"
-	shift
-fi
+manual=""
+while :; do
+	case "${1:-}" in
+	--plain) plain="--plain"; shift ;;
+	--manual) manual="1"; shift ;;
+	*) break ;;
+	esac
+done
 
 go build -o "$diple" "$root/cmd/diple" || exit 1
 
 capture_for() { printf '%s/%s%s.capture.jsonl' "$out" "$1" "${plain:+.plain}"; }
 wrapped() { printf '%s --record %s %s %s' "$diple" "$(capture_for "$1")" "$plain" "$agent"; }
 
-# The gesture typed into a driven host: open the free-card chooser, write a
-# question card, and let the tray draw.
-gesture=$'\033nqhello from the host check\r'
+# The gesture handed to a driven host, in the order R-005 and R-015 ask for.
+# It claims no modifier: a drag over the agent's output, which selects and
+# copies, then a free card written from the tray, which draws.
+#
+# The drag comes first, while the tray is still empty and the agent's rows
+# have not moved under it. Diple's own gestures are ordinary SGR mouse
+# reports, so a host that can type into a window can deliver them.
+drag_press=$'\033[<0;3;3M'
+drag_move=$'\033[<32;24;3M'
+drag_release=$'\033[<0;24;3m'
+card=$'\033nhello from the host check\r'
 
 # app_bundle prints the path of a macOS app bundle, looking in /Applications
 # and then in ~/Applications, where Homebrew puts a cask when /Applications is
@@ -71,6 +83,23 @@ host_version() {
 	esac
 }
 
+# wait_for_gesture holds the run while the person at the keyboard makes the
+# gesture in a host nothing can type into from outside.
+wait_for_gesture() {
+	local host="$1"
+	cat >&2 <<-EOM
+
+	  $host is open with a wrapped session in it. In that window:
+	    1. drag across two rows of the agent's output and let go — it selects
+	       and copies;
+	    2. press Alt+N (Option+N on macOS), type a note, and press Enter — it
+	       makes a card;
+	    3. quit the agent so the capture is written.
+	  Then press Enter here.
+	EOM
+	read -r _ </dev/tty || true
+}
+
 wait_for_capture() {
 	local file="$1" tries=0
 	while [ "$tries" -lt 45 ]; do
@@ -99,7 +128,10 @@ start_host() {
 		tmux kill-session -t diple-verify 2>/dev/null
 		tmux new-session -d -s diple-verify -x 100 -y 30 "$cmd" || return 4
 		sleep 3
-		tmux send-keys -t diple-verify Escape n q "hello from the host check" Enter || return 4
+		for part in "$drag_press" "$drag_move" "$drag_release" "$card"; do
+			tmux send-keys -t diple-verify -l -- "$part" || return 4
+			sleep 1
+		done
 		;;
 	herdr)
 		command -v herdr >/dev/null || return 3
@@ -113,11 +145,17 @@ start_host() {
 			printf '%s\n' "$pane" >"$ctl/herdr.pane"
 			herdr pane run "$pane" "$cmd" >/dev/null 2>&1 || return 4
 			sleep 4
-			herdr pane send-text "$pane" "$gesture" >/dev/null 2>&1 || return 4
+			for part in "$drag_press" "$drag_move" "$drag_release" "$card"; do
+				herdr pane send-text "$pane" "$part" >/dev/null 2>&1 || return 4
+				sleep 1
+			done
 		else
 			herdr agent start diple-verify --cwd "$root" --no-focus -- sh -c "$cmd" >/dev/null 2>&1 || return 4
 			sleep 4
-			herdr agent send diple-verify "$gesture" >/dev/null 2>&1 || return 4
+			for part in "$drag_press" "$drag_move" "$drag_release" "$card"; do
+				herdr agent send diple-verify "$part" >/dev/null 2>&1 || return 4
+				sleep 1
+			done
 		fi
 		;;
 	wezterm)
@@ -133,14 +171,20 @@ start_host() {
 		pane="$(wezterm cli spawn --new-window --pane-id 0 -- sh -c "$cmd" 2>/dev/null)" || return 4
 		[ -n "$pane" ] || return 4
 		sleep 4
-		wezterm cli send-text --no-paste --pane-id "$pane" "$gesture" >/dev/null 2>&1 || return 4
+		for part in "$drag_press" "$drag_move" "$drag_release" "$card"; do
+			printf '%s' "$part" | wezterm cli send-text --no-paste --pane-id "$pane" >/dev/null 2>&1 || return 4
+			sleep 1
+		done
 		;;
 	kitty)
 		command -v kitty >/dev/null || return 3
 		kitty -o allow_remote_control=yes --listen-on "unix:$ctl/kitty.sock" --detach sh -c "$cmd" || return 4
 		sleep 5
 		[ -S "$ctl/kitty.sock" ] || return 4
-		kitty @ --to "unix:$ctl/kitty.sock" send-text "$gesture" >/dev/null 2>&1 || return 4
+		for part in "$drag_press" "$drag_move" "$drag_release" "$card"; do
+			kitty @ --to "unix:$ctl/kitty.sock" send-text -- "$part" >/dev/null 2>&1 || return 4
+			sleep 1
+		done
 		;;
 	ghostty)
 		# Ghostty offers no way to type into a running window from outside,
@@ -204,6 +248,9 @@ for host in "${hosts[@]}"; do
 		;;
 	2) status=1; continue ;;
 	esac
+	if [ -n "$manual" ]; then
+		wait_for_gesture "$host"
+	fi
 	if ! wait_for_capture "$file"; then
 		echo "FAIL $host: no capture was written"
 		status=1

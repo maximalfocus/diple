@@ -8,11 +8,14 @@ package wrap
 import (
 	"io"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/maximalfocus/diple/internal/adapter"
 	"github.com/maximalfocus/diple/internal/card"
+	"github.com/maximalfocus/diple/internal/clip"
 	"github.com/maximalfocus/diple/internal/fold"
 	"github.com/maximalfocus/diple/internal/keys"
 	"github.com/maximalfocus/diple/internal/screen"
@@ -24,9 +27,12 @@ type foldArchive = fold.Archive
 // Envelope sequences: Diple's only additions to the output stream while the
 // session is live. They ask the host terminal to report mouse buttons and
 // drags in the SGR encoding so Diple can own the wheel and see gestures.
+// Motion reporting is what lets Diple know what is under the pointer, which
+// is what the raise is made of; it is forwarded unchanged to an agent that
+// asked for its own.
 const (
-	EnvelopeStart = "\x1b[?1002h\x1b[?1006h"
-	EnvelopeEnd   = "\x1b[?1006l\x1b[?1002l"
+	EnvelopeStart = "\x1b[?1003h\x1b[?1006h"
+	EnvelopeEnd   = "\x1b[?1006l\x1b[?1003l"
 )
 
 // WheelLines is how many rows one wheel notch scrolls.
@@ -70,10 +76,18 @@ type Session struct {
 	store *card.Store
 	// Tray is the session's cards.
 	Tray *card.Tray
-	// Plain restricts Diple's drawing to reverse and underline.
+	// Plain drops colour from Diple's drawing, leaving the bold, dim,
+	// reverse, and underline attributes.
 	Plain bool
-	// Marks enables the gutter mark on anchored blocks.
+	// Marks enables the tail mark on anchored blocks, and the raise with it.
 	Marks bool
+	// NoMotion draws the raise's final frame only.
+	NoMotion bool
+	// CopyOnSelect copies a selection the moment the button comes up, which
+	// is the copy the host used to make and Diple must not cost the user.
+	CopyOnSelect bool
+	// Clip writes the system clipboard. Diple never reads it.
+	Clip *clip.Writer
 	// Keys is the binding table this session answers to.
 	Keys keys.Table
 	// SetPTYRows, when set, is called with the row count the wrapped
@@ -91,7 +105,26 @@ type Session struct {
 	painted    []screen.Line
 	trayH      int
 	sel        *selection
-	editor     *editor
+	// raised is the block the pointer rests on, and raiseTag is the tag in
+	// force, which the strip underlines and the editor's chip names.
+	raised   *raised
+	raiseTag card.Tag
+	// textSel is a drag selection, which may cross blocks and rows.
+	textSel *textSelection
+	// press is the button that is down, held until it comes up: a press that
+	// moves is a selection, and only one that comes up where it went down is
+	// a press on what lies under it. lastPress is the one before it, so a
+	// second and third press at the same cell read as one gesture.
+	press       *pressState
+	lastPress   *pressState
+	lastPressAt time.Time
+	// clipNote is what the tray status line says when the clipboard ladder
+	// reached no rung. copies and lastCopy are what the session put on the
+	// clipboard, which a host check reads to prove the gesture arrived.
+	clipNote string
+	copies   int
+	lastCopy string
+	editor   *editor
 	// suspended holds the editor put away while the agent shows a native
 	// prompt, so the note comes back exactly as it was.
 	suspended *editor
@@ -109,7 +142,9 @@ type Session struct {
 	drag       *dragState
 
 	pendingSubmit bool
-	archive       *foldArchive
+	// now is the session's clock, which tests replace to drive the raise.
+	now     func() time.Time
+	archive *foldArchive
 	// keyErr carries an error raised while handling a key Diple consumed,
 	// which has no return path of its own.
 	keyErr error
@@ -129,7 +164,8 @@ type rowRange struct {
 // NewSession wires a terminal and an agent writer to a fresh model.
 func NewSession(term, agent io.Writer, cols, rows int, rec Recorder) *Session {
 	s := &Session{term: term, agent: agent, Model: screen.New(cols, rows), rec: rec, cols: cols, rows: rows,
-		Tray: &card.Tray{}, Marks: true, Keys: keys.Defaults()}
+		Tray: &card.Tray{}, Marks: true, CopyOnSelect: true, Keys: keys.Defaults(),
+		raiseTag: card.DefaultTag, now: time.Now}
 	s.Model.OnMode = s.onMode
 	return s
 }
@@ -234,6 +270,7 @@ func (s *Session) Stop() error {
 	var first error
 	if s.composited {
 		s.sel, s.editor, s.highlight, s.drag = nil, nil, nil, nil
+		s.raised, s.textSel, s.press = nil, nil, nil
 		s.composited, s.painted = false, nil
 		first = s.returnToLiveLocked()
 	} else if s.back != 0 {
@@ -243,6 +280,34 @@ func (s *Session) Stop() error {
 		first = err
 	}
 	return first
+}
+
+// clock is the session's own time, which tests replace to drive the raise's
+// two frames without waiting for them.
+func (s *Session) clock() time.Time {
+	if s.now == nil {
+		return time.Now()
+	}
+	return s.now()
+}
+
+// SetClock replaces the session clock, for tests that drive the raise.
+func (s *Session) SetClock(now func() time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.now = now
+}
+
+// Tick advances the raise's frames and expires one the pointer has left. The
+// wrapped session calls it on a short timer; it never delays a forwarded byte,
+// because it only ever repaints what Diple itself owns.
+func (s *Session) Tick() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.raiseTick(s.clock()) {
+		return nil
+	}
+	return s.syncLocked()
 }
 
 // HistoryRows returns the rows the rendering mode provides as history, as
@@ -271,6 +336,21 @@ func (s *Session) Scrolled() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.back != 0
+}
+
+// Copies reports how many times this session put text on the clipboard, and
+// LastCopy what it put there last.
+func (s *Session) Copies() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.copies
+}
+
+// LastCopy is the text of the session's most recent copy.
+func (s *Session) LastCopy() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastCopy
 }
 
 // Composited reports whether Diple owns the screen painting.
@@ -365,6 +445,22 @@ func (s *Session) HandleInput(p []byte) error {
 			}
 			continue
 		}
+		// A bracketed paste follows focus. Diple never reads the clipboard:
+		// a paste is text the user's own terminal sent because the user
+		// asked it to.
+		if text, n, ok, incomplete := parsePaste(p); ok {
+			p = p[n:]
+			if s.pasteLocked(text) {
+				continue
+			}
+			forward = append(forward, pasteStart...)
+			forward = append(forward, text...)
+			forward = append(forward, pasteEnd...)
+			continue
+		} else if incomplete && len(p) >= 2 {
+			s.pending = append([]byte(nil), p...)
+			break
+		}
 		if ev, n, ok, incomplete := parseSGRMouse(p); ok {
 			p = p[n:]
 			if e := s.mouseLocked(ev, &forward); e != nil && err == nil {
@@ -412,6 +508,41 @@ func (s *Session) HandleInput(p []byte) error {
 	return err
 }
 
+// pasteLocked routes a bracketed paste by focus: the native box keeps every
+// paste while it has focus, an open editor takes it into its text, and a
+// paste arriving on a focused tray with no editor open becomes one free card
+// holding it, fenced when it carries more than one line. It reports whether
+// Diple took the paste.
+func (s *Session) pasteLocked(text string) bool {
+	if s.prompting || s.hidden {
+		return false
+	}
+	if s.editor != nil {
+		// A pasted newline never submits anything: it joins the text.
+		for _, r := range text {
+			if r == '\r' || r == '\n' {
+				s.editor.text = append(s.editor.text, '\n')
+				continue
+			}
+			if r >= 0x20 {
+				s.editor.text = append(s.editor.text, r)
+			}
+		}
+		return true
+	}
+	if s.focus != focusTray {
+		return false
+	}
+	body := strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	if strings.TrimSpace(body) == "" {
+		return true
+	}
+	s.Tray.Add(&card.Card{Kind: card.Free, Text: body, Fenced: strings.Contains(body, "\n")})
+	s.clampTraySel()
+	_ = s.saveLocked()
+	return true
+}
+
 // keysLocked routes one unit of keyboard input: to the editor, the toolbar,
 // the tray, or the agent.
 func (s *Session) keysLocked(forward, chunk []byte) []byte {
@@ -427,19 +558,6 @@ func (s *Session) keysLocked(forward, chunk []byte) []byte {
 	}
 	if s.search != nil {
 		s.setKeyErr(s.searchKeysLocked(chunk))
-		return forward
-	}
-	// The kind chooser takes one key, whatever has focus; anything typed
-	// behind it in the same chunk goes on to the editor it opened.
-	if s.chooser {
-		s.chooser = false
-		r, size := utf8.DecodeRune(chunk)
-		if k := card.KindByLetter(r); k != "" {
-			s.openFreeEditorLocked(k)
-		}
-		if len(chunk) > size {
-			return s.keysLocked(forward, chunk[size:])
-		}
 		return forward
 	}
 	// Any other key ends a jump the agent has not finished scrolling.
@@ -458,15 +576,25 @@ func (s *Session) keysLocked(forward, chunk []byte) []byte {
 			return forward
 		}
 	}
+	// Tab moves focus between the native box and the tray whatever else is
+	// showing, so a raised block never stands in the way of the tray.
+	if single && s.Keys.Is(keys.TrayFocus, k) && s.Tray.Len() > 0 && s.focus != focusTray {
+		s.sel, s.raised, s.textSel = nil, nil, nil
+		s.focus = focusTray
+		s.clampTraySel()
+		return forward
+	}
 	switch {
-	case s.sel != nil:
-		if single && s.selectionKeyLocked(k) {
+	case s.sel != nil || s.raised != nil || s.textSel != nil:
+		if single && s.sel != nil && s.selectionKeyLocked(k) {
 			return forward
 		}
-		if s.toolbarKeyLocked(chunk) {
+		if s.stripKeyLocked(chunk) {
 			return forward
 		}
-		s.sel = nil
+		// With nothing of Diple's open, Esc reaches the agent unchanged, and
+		// so does a second one in every case.
+		s.sel, s.raised, s.textSel = nil, nil, nil
 		return append(forward, chunk...)
 	case s.focus == focusTray:
 		s.trayKeysLocked(chunk)
@@ -493,7 +621,7 @@ func keyOf(chunk []byte) (keys.Key, bool) {
 // gesture the table binds it to. It reports how many bytes it consumed and
 // whether it handled anything at all.
 func (s *Session) altGestureLocked(p []byte) (int, bool, error) {
-	if s.prompting || s.editor != nil || s.search != nil || len(p) < 2 || p[0] != 0x1b {
+	if s.prompting || s.search != nil || len(p) < 2 || p[0] != 0x1b {
 		return 0, false, nil
 	}
 	// A CSI or SS3 sequence is a key of the terminal's own, never Alt.
@@ -506,21 +634,40 @@ func (s *Session) altGestureLocked(p []byte) (int, bool, error) {
 	}
 	k := keys.Key{Rune: r, Alt: true}
 	n := 1 + size
+	// Inside the editor, Alt belongs to the chips and to the send that saves
+	// the card first.
+	if s.editor != nil {
+		if handled, err := s.editorAltLocked(k); handled {
+			return n, true, err
+		}
+		return 0, false, nil
+	}
 	// Hiding is the one gesture a hidden layer still answers to.
 	if s.Keys.Is(keys.Hide, k) {
 		s.hidden = !s.hidden
+		var err error
 		if s.hidden {
-			s.sel, s.search, s.chooser, s.highlight = nil, nil, false, nil
+			s.sel, s.search, s.highlight = nil, nil, nil
+			s.raised, s.textSel, s.press, s.editor = nil, nil, nil, nil
 			s.focus = focusAgent
+			// Hiding gives the mouse back to the host entirely, so the
+			// host's own selection behaves exactly as it does without
+			// Diple. Only the modes the agent asked for stay on.
+			err = s.releaseMouseLocked()
+		} else {
+			err = writeAll(s.term, []byte(EnvelopeStart))
 		}
-		return n, true, nil
+		return n, true, err
 	}
 	if s.hidden {
 		return 0, false, nil
 	}
 	switch {
 	case s.Keys.Is(keys.FreeCard, k):
-		s.chooser, s.sel = true, nil
+		s.openFreeEditorLocked(false)
+		return n, true, nil
+	case s.Keys.Is(keys.OverallCard, k):
+		s.openFreeEditorLocked(true)
 		return n, true, nil
 	case s.Keys.Is(keys.SelectBlock, k):
 		s.selectTopBlockLocked()
@@ -550,13 +697,27 @@ func (s *Session) updatePromptLocked() {
 		if s.editor != nil {
 			s.suspended, s.editor = s.editor, nil
 		}
-		s.sel, s.search, s.chooser = nil, nil, false
+		s.sel, s.search, s.raised, s.textSel = nil, nil, nil, nil
 		s.focus = focusAgent
 		return
 	}
 	if s.suspended != nil {
 		s.editor, s.suspended = s.suspended, nil
 	}
+}
+
+// releaseMouseLocked turns Diple's mouse reporting off and re-asserts only
+// the modes the wrapped agent asked for, so the host owns the pointer again.
+func (s *Session) releaseMouseLocked() error {
+	buf := []byte(EnvelopeEnd)
+	for _, mode := range []int{screen.ModeMouseNormal, screen.ModeMouseButton, screen.ModeMouseAny, screen.ModeMouseSGR} {
+		if s.Model.Mode(mode) {
+			buf = append(buf, "\x1b[?"...)
+			buf = append(buf, strconv.Itoa(mode)...)
+			buf = append(buf, 'h')
+		}
+	}
+	return writeAll(s.term, buf)
 }
 
 func encodeSGRMouse(ev mouseEvent) []byte {

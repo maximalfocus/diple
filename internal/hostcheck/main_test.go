@@ -30,6 +30,11 @@ func capture(t *testing.T, out string, typed ...string) string {
 
 const reply = "\x1b[1m⏺ Plan\x1b[0m\r\n\r\n  That is the whole plan.\r\n\r\n❯ "
 
+// gesture is what a driven host is asked to deliver: a free card written from
+// an empty tray, and a drag across the agent's output, which copies. Both are
+// what R-005 and R-015 promise in every host.
+var gesture = []string{"\x1b[<0;3;3M", "\x1b[<32;20;3M", "\x1b[<0;20;3m", "\x1bn", "which ports?\r"}
+
 func TestAPassThroughCaptureHasNothingToReport(t *testing.T) {
 	if f := check("fake-host", capture(t, reply), false); len(f) != 0 {
 		t.Fatalf("failures = %v", f)
@@ -38,12 +43,12 @@ func TestAPassThroughCaptureHasNothingToReport(t *testing.T) {
 
 func TestAGestureMustMakeACard(t *testing.T) {
 	// The chooser opens and is dismissed, so nothing is written.
-	f := check("fake-host", capture(t, reply, "\x1bn", "z"), false)
+	f := check("fake-host", capture(t, reply, "\x1bn", "\x1b"), false)
 	if len(f) == 0 || !strings.Contains(strings.Join(f, "\n"), "no card was made") {
 		t.Fatalf("failures = %v", f)
 	}
-	// The same gesture carried through writes a question card.
-	if f := check("fake-host", capture(t, reply, "\x1bn", "q", "which ports?\r"), false); len(f) != 0 {
+	// The same gesture carried through writes a card and copies.
+	if f := check("fake-host", capture(t, reply, gesture...), false); len(f) != 0 {
 		t.Fatalf("failures = %v", f)
 	}
 }
@@ -57,7 +62,7 @@ func TestADrivenHostWithNoGestureFailsRatherThanDegrading(t *testing.T) {
 		t.Fatalf("failures = %v", f)
 	}
 	// The same host driven properly passes.
-	if f := check("tmux", capture(t, reply, "\x1bn", "q", "which ports?\r"), false); len(f) != 0 {
+	if f := check("tmux", capture(t, reply, gesture...), false); len(f) != 0 {
 		t.Fatalf("failures = %v", f)
 	}
 }
@@ -71,12 +76,21 @@ func TestAPassThroughHostWithNoGestureIsNotAFailure(t *testing.T) {
 	}
 }
 
-func TestPlainIsCheckedAgainstTheDrawingMode(t *testing.T) {
-	p := capture(t, reply, "\x1bn", "q", "which ports?\r")
-	// The capture was not recorded with --plain, so checking it as if it
-	// were reports the attribute Diple used.
-	f := check("fake-host", p, true)
-	if len(f) == 0 || !strings.Contains(strings.Join(f, "\n"), "--plain drawing used") {
+// TestPlainForbidsColourButKeepsTheAttributes: --plain drops colour entirely
+// and leaves the bold, dim, reverse, and underline attributes.
+func TestPlainForbidsColourButKeepsTheAttributes(t *testing.T) {
+	for _, drawn := range []string{"\x1b[31mfix\x1b[0m", "\x1b[1;33mask\x1b[0m", "\x1b[38;5;9mnote\x1b[0m", "\x1b[92mx\x1b[0m"} {
+		if bad := disallowedUnderPlain(drawn); bad == "" {
+			t.Fatalf("--plain allowed colour in %q", drawn)
+		}
+	}
+	for _, drawn := range []string{"\x1b[1mbold\x1b[22m", "\x1b[2mdim\x1b[22m", "\x1b[7mreverse\x1b[27m", "\x1b[4munder\x1b[24m", "\x1b[0m"} {
+		if bad := disallowedUnderPlain(drawn); bad != "" {
+			t.Fatalf("--plain refused %q: %s", drawn, bad)
+		}
+	}
+	// A capture whose drawing carries no colour passes the --plain check.
+	if f := check("fake-host", capture(t, reply, gesture...), true); len(f) != 0 {
 		t.Fatalf("failures = %v", f)
 	}
 }
@@ -88,6 +102,15 @@ func TestABrokenCaptureIsReportedNotIgnored(t *testing.T) {
 	}
 	f := check("fake-host", p, false)
 	if len(f) != 1 || !strings.Contains(f[0], "cannot read the capture") {
+		t.Fatalf("failures = %v", f)
+	}
+}
+
+// TestAGestureWithoutACopyIsReported: a copy that no host delivers is no copy,
+// so a driven capture that never reached the clipboard fails.
+func TestAGestureWithoutACopyIsReported(t *testing.T) {
+	f := check("tmux", capture(t, reply, "\x1bn", "which ports?\r"), false)
+	if len(f) == 0 || !strings.Contains(strings.Join(f, "\n"), "nothing reached the clipboard") {
 		t.Fatalf("failures = %v", f)
 	}
 }

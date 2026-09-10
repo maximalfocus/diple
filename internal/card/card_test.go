@@ -9,9 +9,9 @@ import (
 
 func TestTrayOperations(t *testing.T) {
 	tr := &Tray{}
-	a := tr.Add(&Card{Kind: Note, Tag: "fix", Text: "a"})
-	b := tr.Add(&Card{Kind: Note, Tag: "question", Text: "b"})
-	c := tr.Add(&Card{Kind: Note, Tag: "prefer", Text: "c"})
+	a := tr.Add(&Card{Kind: Anchored, Tag: "fix", Text: "a"})
+	b := tr.Add(&Card{Kind: Anchored, Tag: "ask", Text: "b"})
+	c := tr.Add(&Card{Kind: Anchored, Tag: "note", Text: "c"})
 	if a.ID == "" || a.ID == b.ID || tr.Len() != 3 {
 		t.Fatalf("ids %q %q len %d", a.ID, b.ID, tr.Len())
 	}
@@ -32,8 +32,8 @@ func TestTrayOperations(t *testing.T) {
 func TestStoreRoundTrip(t *testing.T) {
 	s := &Store{Dir: t.TempDir() + "/trays"}
 	tr := &Tray{}
-	tr.Add(&Card{Kind: Note, Tag: "fix", Text: "note", Anchor: Anchor{Turn: 1, Block: 2, Kind: blocks.Paragraph, First: 10, Last: 11, Quote: "q", Span: &Span{Row: 10, Col: 2, EndRow: 10, EndCol: 5}}})
-	tr.Add(&Card{Kind: Note, Tag: "prefer", Text: "two", Anchor: Anchor{Turn: 1, Block: 3, Kind: blocks.ListItem, Ordinal: 2}})
+	tr.Add(&Card{Kind: Anchored, Tag: "fix", Text: "note", Anchor: Anchor{Turn: 1, Block: 2, Kind: blocks.Paragraph, First: 10, Last: 11, Quote: "q", Span: &Span{Row: 10, Col: 2, EndRow: 10, EndCol: 5}}})
+	tr.Add(&Card{Kind: Anchored, Tag: "note", Text: "two", Anchor: Anchor{Turn: 1, Block: 3, Kind: blocks.ListItem, Ordinal: 2}})
 	if err := s.Save("claude", "sess/1", tr); err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if got.Len() != 2 || got.Cards[0].Text != "note" || got.Cards[0].Anchor.Span == nil || got.Cards[0].Anchor.Span.EndCol != 5 || got.Cards[1].Anchor.Ordinal != 2 {
 		t.Fatalf("loaded %+v", got.Cards)
 	}
-	added := got.Add(&Card{Kind: Note, Tag: "comment", Text: "three"})
+	added := got.Add(&Card{Kind: Anchored, Tag: "ask", Text: "three"})
 	if added.ID == got.Cards[0].ID {
 		t.Fatal("id collision after load")
 	}
@@ -70,24 +70,29 @@ func TestQuoteAndTags(t *testing.T) {
 	if Quote("  a   b  ") != "a b" {
 		t.Fatal("quote must collapse whitespace")
 	}
-	if TagByLetter('p') != "prefer" || TagByLetter('x') != "" {
+	// The strip's own three letters, in strip order, mapped to indexed
+	// colours 1–3.
+	if TagByLetter('n') != "note" || TagByLetter('f') != "fix" || TagByLetter('a') != "ask" || TagByLetter('x') != "" {
 		t.Fatal("tag by letter")
 	}
-	if Tag("fix").Color() != 1 || Tag("comment").Color() != 6 || Tag("nope").Color() != 0 {
+	if Tag("note").Color() != 1 || Tag("fix").Color() != 2 || Tag("ask").Color() != 3 || Tag("nope").Color() != 0 {
 		t.Fatal("tag colours")
+	}
+	if len(Tags) != 3 || DefaultTag != "note" {
+		t.Fatalf("three tags, note by default: %v", Tags)
 	}
 }
 
 func TestOverallCardIsSingleAndStaysLast(t *testing.T) {
 	tr := &Tray{}
-	tr.Add(&Card{Kind: Note, Tag: "fix", Text: "a"})
-	o := tr.Add(&Card{Kind: Overall, Text: "keep it small"})
-	q := tr.Add(&Card{Kind: Question, Text: "which ports?"})
+	tr.Add(&Card{Kind: Anchored, Tag: "fix", Text: "a"})
+	o := tr.Add(&Card{Kind: Free, Text: "keep it small", Overall: true})
+	q := tr.Add(&Card{Kind: Free, Text: "which ports?"})
 	if tr.Len() != 3 || tr.Cards[1] != q || tr.Cards[2] != o {
 		t.Fatalf("a later card must go before the overall: %v", texts(tr))
 	}
 	// A second overall updates the one the tray has.
-	again := tr.Add(&Card{Kind: Overall, Text: "and rebase"})
+	again := tr.Add(&Card{Kind: Free, Text: "and rebase", Overall: true})
 	if again != o || tr.Len() != 3 || tr.Overall().Text != "and rebase" {
 		t.Fatalf("second overall: len=%d overall=%+v", tr.Len(), tr.Overall())
 	}
@@ -111,12 +116,12 @@ func texts(t *Tray) []string {
 func TestStashSetsATrayAsideAndUnstashGivesItBack(t *testing.T) {
 	s := &Store{Dir: t.TempDir() + "/trays"}
 	tr := &Tray{}
-	tr.Add(&Card{Kind: Note, Tag: "fix", Text: "note", Anchor: Anchor{Turn: 2, Quote: "q"}})
-	tr.Add(&Card{Kind: Instruction, Text: "rebase", Attachments: []Attachment{
+	tr.Add(&Card{Kind: Anchored, Tag: "fix", Text: "note", Anchor: Anchor{Turn: 2, Quote: "q"}})
+	tr.Add(&Card{Kind: Free, Text: "rebase", Attachments: []Attachment{
 		{Kind: PathAttachment, Spec: "src/auth.ts"},
 		{Kind: CommandAttachment, Spec: "git diff --stat", Output: "one line", Status: 0},
 	}})
-	tr.Add(&Card{Kind: Overall, Text: "keep it small"})
+	tr.Add(&Card{Kind: Free, Text: "keep it small", Overall: true})
 	if err := s.Save("claude", "sess-1", tr); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +142,7 @@ func TestStashSetsATrayAsideAndUnstashGivesItBack(t *testing.T) {
 		t.Fatalf("restored: len=%d err=%v", got.Len(), err)
 	}
 	if got.Cards[0].Text != "note" || got.Cards[0].Anchor.Quote != "q" ||
-		got.Cards[1].Kind != Instruction || len(got.Cards[1].Attachments) != 2 ||
+		got.Cards[1].Kind != Free || len(got.Cards[1].Attachments) != 2 ||
 		got.Cards[1].Attachments[1].Output != "one line" || got.Overall() != got.Cards[2] {
 		t.Fatalf("restored tray differs: %+v", got.Cards)
 	}

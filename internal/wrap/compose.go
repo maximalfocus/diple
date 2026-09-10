@@ -2,6 +2,7 @@ package wrap
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/maximalfocus/diple/internal/card"
 	"github.com/maximalfocus/diple/internal/screen"
@@ -13,7 +14,8 @@ func (s *Session) ownsScreen() bool {
 	if s.hidden {
 		return false
 	}
-	return s.Tray.Len() > 0 || s.sel != nil || s.editor != nil || s.search != nil || s.chooser || s.highlight != nil
+	return s.Tray.Len() > 0 || s.sel != nil || s.editor != nil || s.search != nil ||
+		s.highlight != nil || s.raised != nil || s.textSel != nil
 }
 
 // trayHeight is the divider plus one row per card, capped at a third of
@@ -130,17 +132,12 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 	start := s.windowStart()
 	toScreen := func(hist int) int { return hist - start }
 
-	// Gutter marks on anchored blocks.
+	// The tail mark on a block that carries a card: Diple's own › one column
+	// after the block's last character, in the card's tag colour, with the
+	// count when a block carries more than one. It is the only thing Diple
+	// leaves in the agent's text once the pointer is elsewhere.
 	if s.Marks {
-		for _, c := range s.Tray.Cards {
-			first, _, ok := s.resolveAnchor(&c.Anchor)
-			if !ok {
-				continue
-			}
-			if r := toScreen(first); r >= 0 && r < len(base) && len(base[r].Cells) > 0 && base[r].Cells[0].Rune == ' ' {
-				base[r].Cells[0] = screen.Cell{Rune: '›', Width: 1, Attr: s.dimAttr()}
-			}
-		}
+		s.drawTailMarks(base, toScreen)
 	}
 	// Highlight of a card's anchor.
 	if s.highlight != nil {
@@ -148,6 +145,36 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 			if r := toScreen(h); r >= 0 && r < len(base) {
 				reverseRow(&base[r])
 			}
+		}
+	}
+	// The raise: the block's bounding box in reverse video, which fills the
+	// short rows' tails and makes the block read as one slab. Selection is
+	// reverse video too, which is why pressing a raised block changes nothing.
+	if s.raised != nil {
+		for h := s.raised.first; h <= s.raised.last; h++ {
+			r := toScreen(h)
+			if r < 0 || r >= len(base) {
+				continue
+			}
+			reverseSpan(&base[r], s.raised.left, s.raised.right)
+		}
+	}
+	// A drag selection, which may cross blocks and rows.
+	if s.textSel != nil {
+		first, firstCol, last, lastCol := s.textSel.rows(s.dropped())
+		for h := first; h <= last; h++ {
+			r := toScreen(h)
+			if r < 0 || r >= len(base) {
+				continue
+			}
+			from, to := 0, len(base[r].Cells)-1
+			if h == first {
+				from = firstCol
+			}
+			if h == last {
+				to = lastCol
+			}
+			reverseSpan(&base[r], from, to)
 		}
 	}
 	// Selection: block rows in reverse, a span underlined.
@@ -178,9 +205,15 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 			}
 		}
 	}
-	// Toolbar, editor, search, or kind-chooser overlay row.
+	// The strip wipes in on the row beneath the block, at the block's own left
+	// edge, for every block whatever its width, because a user who never has
+	// to look for it can reach it without looking.
+	if sr := s.stripRow(); sr >= 0 && sr < len(base) {
+		s.drawStrip(&base[sr])
+	}
+	// The editor, search field, or the strip's own row when nothing is raised.
 	overlayRow := -1
-	if s.sel != nil || s.editor != nil || s.search != nil || s.chooser {
+	if s.editor != nil || s.search != nil || s.sel != nil {
 		overlayRow = s.overlayRowLocked(agentRows)
 		if overlayRow >= 0 && overlayRow < len(base) {
 			switch {
@@ -188,14 +221,9 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 				base[overlayRow] = s.editorLine()
 			case s.search != nil:
 				base[overlayRow] = s.searchLine()
-			case s.chooser:
-				base[overlayRow] = s.chooserLine()
-			default:
-				base[overlayRow] = s.toolbarLine()
 			}
 		}
 	}
-
 	in := s.inputRow()
 	lines = make([]screen.Line, 0, s.rows)
 	lines = append(lines, base[:in]...)
@@ -222,6 +250,19 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 
 func reverseRow(l *screen.Line) {
 	for x := range l.Cells {
+		l.Cells[x].Attr.Flags ^= screen.Reverse
+	}
+}
+
+// reverseSpan reverses the cells between two columns, inclusive.
+func reverseSpan(l *screen.Line, from, to int) {
+	if from < 0 {
+		from = 0
+	}
+	if to >= len(l.Cells) {
+		to = len(l.Cells) - 1
+	}
+	for x := from; x <= to; x++ {
 		l.Cells[x].Attr.Flags ^= screen.Reverse
 	}
 }
@@ -258,17 +299,13 @@ func (s *Session) repaintLocked() error {
 
 // --- Diple's own drawing ---------------------------------------------------
 
+// --plain drops colour entirely, leaving the bold, dim, reverse, and
+// underline attributes, which is why only tagAttr changes under it.
 func (s *Session) dimAttr() screen.Attr {
-	if s.Plain {
-		return screen.Attr{}
-	}
 	return screen.Attr{Flags: screen.Dim}
 }
 
 func (s *Session) boldAttr() screen.Attr {
-	if s.Plain {
-		return screen.Attr{Flags: screen.Underline}
-	}
 	return screen.Attr{Flags: screen.Bold}
 }
 
@@ -335,7 +372,15 @@ func (s *Session) trayLines() []screen.Line {
 	if s.pendingSubmit {
 		label = " › will send when idle "
 	}
+	if s.clipNote != "" {
+		label = " › " + s.clipNote + " "
+	}
 	putText(&div, 1, label, s.dimAttr())
+	// The tray's status line carries the send at its right end, since a
+	// product that is pointed at needs a way to send that is pointed at too.
+	from, _ := s.sendHit()
+	putText(&div, from-1, " ", s.dimAttr())
+	putText(&div, from, sendLabel, s.boldAttr())
 	lines = append(lines, div)
 	visible := s.trayH - 1
 	if s.traySel >= s.trayScroll+visible {
@@ -357,35 +402,129 @@ func (s *Session) cardLine(i int) screen.Line {
 	c := s.Tray.Cards[i]
 	l := s.blankLine()
 	x := putText(&l, 1, strconv.Itoa(i+1)+" ", s.dimAttr())
-	label := string(c.Tag)
-	if c.Kind != card.Note {
-		label = string(c.Kind)
+	// An anchored card wears its tag; a free card carries none, since a card
+	// with nothing to point at is simply the text the user would have typed.
+	if c.Kind == card.Anchored {
+		x = putText(&l, x, "["+string(c.Tag)+"] ", s.tagAttr(c.Tag))
+	} else if c.Overall {
+		x = putText(&l, x, "[overall] ", s.dimAttr())
 	}
-	x = putText(&l, x, "["+label+"] ", s.tagAttr(c.Tag))
 	if c.Anchor.Quote != "" {
-		x = putText(&l, x, "“"+c.Anchor.Quote+"” ", s.dimAttr())
+		x = putText(&l, x, "“"+card.Quote(c.Anchor.Quote)+"” ", s.dimAttr())
 	}
-	x = putText(&l, x, c.Text, screen.Attr{})
+	x = putText(&l, x, firstLine(c.Text), screen.Attr{})
 	if n := len(c.Attachments); n > 0 {
 		putText(&l, x+1, "("+strconv.Itoa(n)+" attached)", s.dimAttr())
 	}
+	// The × at a card's end deletes it outright.
+	putText(&l, s.cols-2, "×", s.dimAttr())
 	if s.focus == focusTray && i == s.traySel {
 		reverseRow(&l)
 	}
 	return l
 }
 
-// toolbarLine renders the six actions with their initial letters marked.
-func (s *Session) toolbarLine() screen.Line {
-	l := s.blankLine()
-	x := putText(&l, 1, "› ", s.dimAttr())
-	for _, t := range card.Tags {
-		name := string(t)
-		x = putText(&l, x, name[:1], mergeAttr(s.tagAttr(t), s.boldAttr()))
-		x = putText(&l, x, name[1:]+"  ", s.tagAttr(t))
+// firstLine is what a card shows on its one row when its text holds more.
+func firstLine(text string) string {
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		return text[:i] + " …"
 	}
-	putText(&l, x, "esc", s.dimAttr())
-	return l
+	return text
+}
+
+// sendHit is the column range the status line's send answers on.
+func (s *Session) sendHit() (from, to int) {
+	to = s.cols - 2
+	return to - len(sendLabel) + 1, to
+}
+
+const sendLabel = "send"
+
+// drawStrip writes the raised block's row of choices. The strip is opaque: it
+// writes every cell it covers, its own pad cells included, so nothing of the
+// agent's text shows through it or crowds it. It underlines the tag in force
+// rather than a fixed default, so the strip and the editor's chip never say
+// different things.
+func (s *Session) drawStrip(l *screen.Line) {
+	r := s.raised
+	if r == nil {
+		return
+	}
+	choices, first, last := stripLayout(r.left)
+	// Every cell of the strip is Diple's, pads included.
+	for x := first; x <= last && x < len(l.Cells); x++ {
+		if x < 0 {
+			continue
+		}
+		l.Cells[x] = screen.Blank(screen.Attr{})
+	}
+	if d := stripDividerCol(choices); d >= 0 && d < len(l.Cells) {
+		l.Cells[d] = screen.Cell{Rune: '│', Width: 1, Attr: s.dimAttr()}
+	}
+	inForce := s.raiseTag
+	if inForce == "" {
+		inForce = card.DefaultTag
+	}
+	for _, c := range choices {
+		attr := s.tagAttr(c.tag)
+		if c.tag == "" {
+			attr = s.dimAttr()
+		}
+		if c.tag != "" && c.tag == inForce {
+			attr = mergeAttr(attr, screen.Attr{Flags: screen.Underline})
+		}
+		putText(l, c.from, c.label, attr)
+	}
+}
+
+// drawTailMarks puts Diple's own › one column after the last character of
+// every block that carries a card, in the card's tag colour, and the count
+// when a block carries more than one.
+func (s *Session) drawTailMarks(base []screen.Line, toScreen func(int) int) {
+	type mark struct {
+		tag   card.Tag
+		count int
+	}
+	marks := map[int]*mark{}
+	for _, c := range s.Tray.Cards {
+		if c.Kind != card.Anchored {
+			continue
+		}
+		_, last, ok := s.resolveAnchor(&c.Anchor)
+		if !ok {
+			continue
+		}
+		if m := marks[last]; m != nil {
+			m.count++
+			continue
+		}
+		marks[last] = &mark{tag: c.Tag, count: 1}
+	}
+	for hist, m := range marks {
+		r := toScreen(hist)
+		if r < 0 || r >= len(base) {
+			continue
+		}
+		x := lastTextCol(base[r]) + 1
+		if x < 0 || x >= len(base[r].Cells) {
+			continue
+		}
+		attr := s.tagAttr(m.tag)
+		base[r].Cells[x] = screen.Cell{Rune: '›', Width: 1, Attr: attr}
+		if m.count > 1 {
+			putText(&base[r], x+1, strconv.Itoa(m.count), attr)
+		}
+	}
+}
+
+// lastTextCol is the column of a row's last non-blank cell, or -1.
+func lastTextCol(l screen.Line) int {
+	for x := len(l.Cells) - 1; x >= 0; x-- {
+		if l.Cells[x].Rune != 0 && l.Cells[x].Rune != ' ' {
+			return x
+		}
+	}
+	return -1
 }
 
 func mergeAttr(a, b screen.Attr) screen.Attr {
@@ -415,19 +554,6 @@ func (s *Session) editorLabel() string {
 		return string(e.kind)
 	}
 	return "note"
-}
-
-// chooserLine offers the free card kinds, in the toolbar's own shape.
-func (s *Session) chooserLine() screen.Line {
-	l := s.blankLine()
-	x := putText(&l, 1, "› ", s.dimAttr())
-	for _, k := range card.FreeKinds {
-		name := string(k)
-		x = putText(&l, x, name[:1], s.boldAttr())
-		x = putText(&l, x, name[1:]+"  ", screen.Attr{})
-	}
-	putText(&l, x, "esc", s.dimAttr())
-	return l
 }
 
 // searchLine renders the transcript search field: the query, and a note when

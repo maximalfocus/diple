@@ -75,3 +75,24 @@ func parseEndKey(p []byte) (n int, ok bool) {
 	}
 	return 0, false
 }
+
+// parsePaste decodes a bracketed paste at the start of p. Diple keeps
+// bracketed paste on for its own input so it can tell a paste from typing,
+// and so a pasted newline never submits anything.
+func parsePaste(p []byte) (text string, n int, ok bool, incomplete bool) {
+	start, end := []byte(pasteStart), []byte(pasteEnd)
+	if !bytes.HasPrefix(p, start) {
+		if len(p) < len(start) && bytes.HasPrefix(start, p) {
+			return "", 0, false, true
+		}
+		return "", 0, false, false
+	}
+	body := p[len(start):]
+	i := bytes.Index(body, end)
+	if i < 0 {
+		// The tail has not arrived yet; wait for it rather than treating the
+		// paste as typing.
+		return "", 0, false, true
+	}
+	return string(body[:i]), len(start) + i + len(end), true, false
+}

@@ -6,7 +6,8 @@ re-checked, the domain is registered, and the repository is made public.
 
 ## Done in the repository
 
-- [x] Every requirement of the initial release is implemented and landed.
+- [x] Every requirement of the initial release is implemented and landed,
+      through the selection and clipboard parity R-015 adds.
 - [x] `gofmt -l .`, `go vet ./...`, and `go test -race ./...` are clean, and CI
       runs them on Linux and macOS and cross-compiles darwin/linux ×
       amd64/arm64.
@@ -29,37 +30,50 @@ were forwarded unchanged while the tray was empty, Diple drew no 24-bit colour,
 and the terminal was left as it was found. R-014 puts every host in one of two
 classes and the check enforces the difference. A **driven** host offers a
 documented way to type into a running window from outside, so its capture must
-also carry a gesture and the card that gesture made. A **pass-through only**
-host offers none, so forwarding, the envelope, and restore are the whole of
-what it can show. A driven host whose gesture does not arrive fails the run
-instead of falling back to the pass-through check, and a host that is absent is
-reported apart from one that is present and could not be driven.
-`scripts/verify-hosts.sh --plain` additionally requires that Diple's own
-drawing used only reverse and underline.
+also carry a gesture, the card that gesture made, and the copy it took. A
+**pass-through only** host offers none, so forwarding, the envelope, and
+restore are the whole of what an unattended run can show there. A driven host
+whose gesture does not arrive fails the run instead of falling back to the
+pass-through check, and a host that is absent is reported apart from one that
+is present and could not be driven. `scripts/verify-hosts.sh --plain`
+additionally requires that Diple's own drawing carried no colour.
+
+Diple's gestures are ordinary SGR mouse reports, so the gesture handed to a
+driven host is the real one R-005 and R-015 describe: a drag across the agent's
+output, which selects and copies, then a free card written from the tray. The
+check reads the copy from the session's own count rather than from the bytes,
+because the clipboard ladder ends in OSC 52 on some hosts and in the platform's
+own command on others; which rung carried it is the ladder's business, and it
+has its own tests and its own live check.
+
+`scripts/verify-hosts.sh --manual <host>` starts the session and waits for the
+person at the keyboard to make the gesture. It is how a pass-through host is
+shown to deliver R-005 and R-015, since nothing can type into one from outside.
 
 Each row was recorded twice, once in each drawing mode, and names the host
 version it ran against as R-012 does for an adapter's CLI.
 
 | Host | Class | Result | Version | Machine |
 |---|---|---|---|---|
-| WezTerm | driven | pass, gesture | 20240203-110809-5046fc22 | macOS 26.6 arm64; Linux amd64 |
-| kitty | driven | pass, gesture | 0.48.2 | macOS 26.6 arm64 |
-| kitty | driven | pass, gesture | 0.45.0 | Linux amd64 |
-| `tmux` | driven | pass, gesture | 3.7c | macOS 26.6 arm64 |
-| `tmux` | driven | pass, gesture | 3.6 | Linux amd64 |
-| `herdr` | driven | pass, gesture | 0.7.4 | macOS 26.6 arm64 |
-| `herdr` | driven | pass, gesture | 0.8.2 | Linux amd64 |
-| Ghostty | pass-through | pass | 1.3.1 | macOS 26.6 arm64 |
-| Ghostty | pass-through | pass | 1.3.0 | Linux amd64 |
-| Terminal.app | pass-through | pass | 2.15 | macOS 26.6 arm64 |
-| iTerm2 | pass-through | pass | 3.7.0 | macOS 26.6 arm64 |
+| WezTerm | driven | pass, gesture + card + copy | 20240203-110809-5046fc22 | macOS 26.6 arm64 |
+| kitty | driven | pass, gesture + card + copy | 0.48.2 | macOS 26.6 arm64 |
+| `tmux` | driven | pass, gesture + card + copy | 3.7c | macOS 26.6 arm64 |
+| `herdr` | driven | pass, gesture + card + copy | 0.7.4 | macOS 26.6 arm64 |
+| Terminal.app | pass-through | pass, forwarding/envelope/restore | 2.15 | macOS 26.6 arm64 |
+| iTerm2 | pass-through | **not re-run** | 3.7.0 | — |
+| Ghostty | pass-through | **not re-run** | 1.3.1 | — |
 
-All seven hosts were recorded on macOS arm64 in both drawing modes, and the
-five that exist on Linux were recorded there too. `herdr` was verified against
-both of its control APIs: 0.7 through `agent start` and `agent send`, 0.8
-through `tab create`, `pane run`, and `pane send-text`. The check looks for a
-macOS app bundle in `/Applications` and then in `~/Applications`, which is
-where Homebrew puts a cask when `/Applications` is not writable by the user.
+The four driven hosts were re-verified against this release's gesture in both
+drawing modes. Terminal.app was re-verified in its class.
+
+**Outstanding, and the reason this checklist is not complete:** R-005 and R-015
+require the gesture and the copy to be shown live in every host, the
+pass-through class included, because a gesture no host delivers is no gesture.
+That needs `scripts/verify-hosts.sh --manual terminal.app iterm2 ghostty`, run
+by a person at the keyboard, and for iTerm2 and Ghostty it needs a session that
+can launch them: launching a GUI application that is not already running was
+not possible from the environment this release was prepared in, and `open -a`
+returned without starting either.
 
 ## Left for the release itself
 

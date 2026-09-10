@@ -52,18 +52,18 @@ func TestKeyboardReplayOfTheMouseJourney(t *testing.T) {
 				t.Fatalf("paragraph card = %+v", c)
 			}
 
-			// 2. The second list item, tagged prefer, keeping its ordinal.
+			// 2. The second list item, tagged note, keeping its ordinal.
 			selectBlockByText(t, s, "Change the handler")
-			send(t, s, "p")
+			send(t, s, "n")
 			send(t, s, "\r")
 			c = s.Tray.Cards[1]
-			if c.Tag != "prefer" || c.Anchor.Kind != blocks.ListItem || c.Anchor.Ordinal != 2 ||
+			if c.Tag != "note" || c.Anchor.Kind != blocks.ListItem || c.Anchor.Ordinal != 2 ||
 				c.Anchor.Quote != "Change the handler" {
-				t.Fatalf("prefer card = %+v", c)
+				t.Fatalf("list card = %+v", c)
 			}
 
 			// 3. A code-line range: select the code block, take its first
-			// line, extend twice, tag reject.
+			// line, extend twice, tag ask.
 			selectBlockByText(t, s, "func handle(")
 			send(t, s, "L")
 			if s.sel == nil || s.sel.lines == nil {
@@ -72,16 +72,16 @@ func TestKeyboardReplayOfTheMouseJourney(t *testing.T) {
 			first := s.sel.first
 			send(t, s, "V")
 			send(t, s, "V")
-			send(t, s, "r")
+			send(t, s, "a")
 			send(t, s, "wrong status\r")
 			c = s.Tray.Cards[2]
-			if c.Tag != "reject" || c.Anchor.Kind != blocks.CodeLine || c.Anchor.Lines == nil ||
+			if c.Tag != "ask" || c.Anchor.Kind != blocks.CodeLine || c.Anchor.Lines == nil ||
 				c.Anchor.Lines.Last-c.Anchor.Lines.First != 2 || c.Anchor.First != first ||
 				!strings.HasPrefix(c.Anchor.Quote, "func handle(") || !strings.HasSuffix(c.Anchor.Quote, "}") {
 				t.Fatalf("line-range card = %+v", c)
 			}
 
-			// 4. A span inside the first list item, by word, tagged question.
+			// 4. A span inside the first list item, by word, tagged fix.
 			selectBlockByText(t, s, "Read the config file")
 			send(t, s, "v")
 			send(t, s, "w")
@@ -93,10 +93,10 @@ func TestKeyboardReplayOfTheMouseJourney(t *testing.T) {
 			if s.sel.span.Col != 5 || s.sel.span.EndCol != 19 {
 				t.Fatalf("span columns = %d..%d, want 5..19", s.sel.span.Col, s.sel.span.EndCol)
 			}
-			send(t, s, "q")
+			send(t, s, "f")
 			send(t, s, "which ports?\r")
 			c = s.Tray.Cards[3]
-			if c.Tag != "question" || c.Anchor.Span == nil || c.Anchor.Quote != "Read the config" {
+			if c.Tag != "fix" || c.Anchor.Span == nil || c.Anchor.Quote != "Read the config" {
 				t.Fatalf("span card = %+v", c)
 			}
 			if agent.Len() != 0 {
@@ -232,10 +232,10 @@ func TestHideHotkeyGetsOutOfTheWayAndComesBack(t *testing.T) {
 		t.Fatalf("hidden output = %q, want %q", got, chunk)
 	}
 	agent.Reset()
-	send(t, s, "\x1bn") // the free-card chooser must not open
+	send(t, s, "\x1bn") // the free-card editor must not open
 	send(t, s, "j")
-	if s.chooser || s.sel != nil || s.Composited() {
-		t.Fatalf("hidden layer answered a gesture: chooser=%v sel=%v", s.chooser, s.sel)
+	if s.editor != nil || s.sel != nil || s.raised != nil || s.Composited() {
+		t.Fatalf("hidden layer answered a gesture: editor=%v sel=%v raised=%v", s.editor, s.sel, s.raised)
 	}
 	// Alt+H again brings the layer back with the tray intact.
 	send(t, s, "\x1bh")
