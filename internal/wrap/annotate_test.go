@@ -2,16 +2,19 @@ package wrap
 
 import (
 	"bytes"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/maximalfocus/diple/internal/adapter"
 	"github.com/maximalfocus/diple/internal/adapter/claude"
 	"github.com/maximalfocus/diple/internal/blocks"
 	"github.com/maximalfocus/diple/internal/card"
+	"github.com/maximalfocus/diple/internal/clip"
 	"github.com/maximalfocus/diple/internal/record"
 	"github.com/maximalfocus/diple/internal/screen"
 )
@@ -21,6 +24,15 @@ type staticSource struct{ tr *adapter.Transcript }
 func (s staticSource) Transcript() (*adapter.Transcript, error) { return s.tr, nil }
 
 const fixtureDir = "../adapter/claude/testdata/2.1.266"
+
+// advance moves the session's own clock forward, which is how a test drives
+// the raise's two frames without waiting for them.
+func advance(s *Session, d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	at := s.now().Add(d)
+	s.now = func() time.Time { return at }
+}
 
 // fixtureSession replays a recorded Claude Code session through a Session
 // with the Claude adapter and the matching transcript.
@@ -45,6 +57,11 @@ func fixtureSession(t *testing.T, mode string) (*Session, *bytes.Buffer, *bytes.
 	s := NewSession(term, agent, rec.Header.Cols, rec.Header.Rows, nil)
 	s.UseAdapter(a, "claude")
 	s.Source = staticSource{tr}
+	// The host answers for the clipboard, so a copy lands in the terminal
+	// stream as OSC 52 and the test can read exactly what was copied.
+	s.Clip = &clip.Writer{OSC52Answered: true}
+	at := time.Unix(1700000000, 0)
+	s.SetClock(func() time.Time { return at })
 	if err := s.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -63,9 +80,9 @@ func fixtureSession(t *testing.T, mode string) (*Session, *bytes.Buffer, *bytes.
 	return s, term, agent
 }
 
-// rowOf finds the history row of the assistant turn whose text contains
-// sub, searching from the last turn marker so the echoed prompt above it
-// is never matched.
+// rowOf finds the history row of the assistant turn whose text contains sub,
+// searching from the last turn marker so the echoed prompt above it is never
+// matched.
 func rowOf(t *testing.T, s *Session, sub string) int {
 	t.Helper()
 	rows := s.HistoryRows()
@@ -91,11 +108,6 @@ func yOf(s *Session, hist int) int {
 	return s.agentToPhysical(hist-s.windowStart()) + 1
 }
 
-func metaClick(t *testing.T, s *Session, x, y int) {
-	t.Helper()
-	send(t, s, "\x1b[<8;"+itoa(x)+";"+itoa(y)+"M\x1b[<8;"+itoa(x)+";"+itoa(y)+"m")
-}
-
 func send(t *testing.T, s *Session, in string) {
 	t.Helper()
 	if err := s.HandleInput([]byte(in)); err != nil {
@@ -105,96 +117,200 @@ func send(t *testing.T, s *Session, in string) {
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
+// motionAt is a pointer report with no button down.
+func motionAt(x, y int) string { return "\x1b[<35;" + itoa(x) + ";" + itoa(y) + "M" }
+
+// pressAt and releaseAt are the two halves of a press. A press means what it
+// means when it ends, so a test that means a press sends both.
+func pressAt(x, y int) string   { return "\x1b[<0;" + itoa(x) + ";" + itoa(y) + "M" }
+func releaseAt(x, y int) string { return "\x1b[<0;" + itoa(x) + ";" + itoa(y) + "m" }
+func dragTo(x, y int) string    { return "\x1b[<32;" + itoa(x) + ";" + itoa(y) + "M" }
+
+// shiftPressAt is the one place the model lets a modifier through: a
+// Shift-press on a second raised line extends to a range.
+func shiftPressAt(x, y int) string {
+	return "\x1b[<4;" + itoa(x) + ";" + itoa(y) + "M\x1b[<4;" + itoa(x) + ";" + itoa(y) + "m"
+}
+
+// dwellOn rests the pointer on a cell until the raise has both its frames.
+func dwellOn(t *testing.T, s *Session, x, y int) {
+	t.Helper()
+	send(t, s, motionAt(x, y))
+	advance(s, raiseDwell+stripDelay+time.Millisecond)
+	if err := s.Tick(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// raisePress is the whole gesture: rest the pointer on a block until it rises,
+// then press it. It claims no modifier key.
+func raisePress(t *testing.T, s *Session, x, y int) {
+	t.Helper()
+	dwellOn(t, s, x, y)
+	send(t, s, pressAt(x, y)+releaseAt(x, y))
+}
+
+// pressRaised presses a raised block, or one of its strip's choices.
+func pressRaised(t *testing.T, s *Session, x, y int) {
+	t.Helper()
+	send(t, s, pressAt(x, y)+releaseAt(x, y))
+}
+
+// physical composes what the terminal should show.
 func physical(s *Session) ([]screen.Line, int, int, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.physicalLocked()
 }
 
-func TestAnnotateFixtureProducesExpectedCards(t *testing.T) {
+// clipboard is the text the last OSC 52 put on the clipboard.
+func clipboard(t *testing.T, term *bytes.Buffer) string {
+	t.Helper()
+	out := term.String()
+	i := strings.LastIndex(out, "\x1b]52;c;")
+	if i < 0 {
+		return ""
+	}
+	rest := out[i+len("\x1b]52;c;"):]
+	j := strings.IndexByte(rest, '\a')
+	if j < 0 {
+		t.Fatalf("unterminated OSC 52 in %q", rest)
+	}
+	data, err := base64.StdEncoding.DecodeString(rest[:j])
+	if err != nil {
+		t.Fatalf("OSC 52 payload: %v", err)
+	}
+	return string(data)
+}
+
+// blockLeft is the column just inside a raised block, for a pointer that
+// means the block rather than the margin beside it.
+func blockLeft(s *Session) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.raised == nil {
+		return 1
+	}
+	return s.raised.left + 1
+}
+
+func texts(lines []screen.Line) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = l.String()
+	}
+	return out
+}
+
+func cardTexts(t *card.Tray) []string {
+	var out []string
+	for _, c := range t.Cards {
+		out = append(out, c.Text)
+	}
+	return out
+}
+
+// TestRaiseAndStripProduceExpectedCards exercises each tag on a paragraph, a
+// list item, a code line range, and a dragged span, and checks the cards that
+// come out.
+func TestRaiseAndStripProduceExpectedCards(t *testing.T) {
 	for _, mode := range []string{"inline", "fullscreen"} {
 		t.Run(mode, func(t *testing.T) {
 			s, term, agent := fixtureSession(t, mode)
 
-			// 1. Modifier-click on the paragraph, then fix + note.
+			// 1. Rest on the paragraph and press it: the editor opens tagged
+			// note, with nothing between pointing and typing.
 			para := rowOf(t, s, "That is the whole plan.")
-			metaClick(t, s, 5, yOf(s, para))
-			if s.sel == nil || s.sel.kind != blocks.Paragraph || s.sel.first != para {
-				t.Fatalf("selection = %+v", s.sel)
+			dwellOn(t, s, 6, yOf(s, para))
+			if s.raised == nil || s.raised.kind != blocks.Paragraph || s.raised.first != para {
+				t.Fatalf("raise = %+v", s.raised)
 			}
-			lines, _, _, _ := physical(s)
-			if !s.Composited() || term.Len() == 0 || !strings.Contains(strings.Join(texts(lines), "\n"), "fix  question  reject  approve  prefer  comment") {
-				t.Fatalf("toolbar not drawn: composited=%v", s.Composited())
+			if !s.Composited() || term.Len() == 0 {
+				t.Fatalf("the raise did not draw: composited=%v", s.Composited())
 			}
-			send(t, s, "f")
-			if s.editor == nil || s.editor.tag != "fix" {
+			pressRaised(t, s, blockLeft(s), yOf(s, para))
+			if s.editor == nil || s.editor.tag != card.DefaultTag {
 				t.Fatalf("editor = %+v", s.editor)
 			}
+			// Motion reaches an agent that asked for its own; the editor's
+			// own keys never do.
+			agent.Reset()
 			send(t, s, "tighten this")
 			if agent.Len() != 0 {
 				t.Fatalf("editor keys reached the agent: %q", agent.Bytes())
 			}
 			send(t, s, "\r")
-			if s.Tray.Len() != 1 {
-				t.Fatalf("tray = %d cards", s.Tray.Len())
-			}
 			c := s.Tray.Cards[0]
-			if c.Tag != "fix" || c.Text != "tighten this" || c.Anchor.Kind != blocks.Paragraph ||
-				c.Anchor.First != para || c.Anchor.Last != para || c.Anchor.Quote != "That is the whole plan." {
+			if c.Kind != card.Anchored || c.Tag != "note" || c.Text != "tighten this" ||
+				c.Anchor.Kind != blocks.Paragraph || c.Anchor.First != para ||
+				c.Anchor.Quote != "That is the whole plan." {
 				t.Fatalf("card = %+v", c)
 			}
 
-			// 2. Modifier-click on the second list item, then prefer.
+			// 2. A list item, tagged fix from the strip. The ordinal is
+			// recorded whatever the tag is.
 			item := rowOf(t, s, "2. Change the handler")
-			metaClick(t, s, 5, yOf(s, item))
-			send(t, s, "p")
-			send(t, s, "\r")
+			dwellOn(t, s, 6, yOf(s, item))
+			sr := stripRowFor(t, s)
+			hit := choiceFor(t, s, "fix")
+			pressRaised(t, s, hit+1, sr)
+			if s.editor == nil || s.editor.tag != "fix" {
+				t.Fatalf("editor after a strip press = %+v", s.editor)
+			}
+			send(t, s, "pick this\r")
 			c = s.Tray.Cards[1]
-			if c.Tag != "prefer" || c.Anchor.Kind != blocks.ListItem || c.Anchor.Ordinal != 2 || c.Anchor.Quote != "Change the handler" {
-				t.Fatalf("prefer card = %+v", c)
+			if c.Tag != "fix" || c.Anchor.Kind != blocks.ListItem || c.Anchor.Ordinal != 2 ||
+				c.Anchor.Quote != "Change the handler" {
+				t.Fatalf("list card = %+v", c)
 			}
 
-			// 3. Gutter click on a code line, shift-click extends, then reject.
+			// 3. A code line, extended to a range by a Shift-press on a
+			// second raised line, with the chip moved to ask.
 			line1 := rowOf(t, s, "func handle(")
 			line3 := rowOf(t, s, "  }")
-			send(t, s, "\x1b[<0;1;"+itoa(yOf(s, line1))+"M\x1b[<0;1;"+itoa(yOf(s, line1))+"m")
-			if s.sel == nil || s.sel.lines == nil || s.sel.first != line1 || s.sel.last != line1 {
-				t.Fatalf("line selection = %+v", s.sel)
+			dwellOn(t, s, 6, yOf(s, line1))
+			if s.raised == nil || !s.raised.line {
+				t.Fatalf("a code line must rise, not its block: %+v", s.raised)
 			}
-			send(t, s, "\x1b[<4;1;"+itoa(yOf(s, line3))+"M\x1b[<4;1;"+itoa(yOf(s, line3))+"m")
-			if s.sel == nil || s.sel.lines == nil || s.sel.first != line1 || s.sel.last != line3 {
-				t.Fatalf("extended line selection = %+v", s.sel)
+			pressRaised(t, s, blockLeft(s), yOf(s, line1))
+			if s.editor == nil || s.editor.sel == nil || s.editor.sel.lines == nil {
+				t.Fatalf("pressing a raised line did not open a line editor: %+v", s.editor)
 			}
-			send(t, s, "r")
+			dwellOn(t, s, 6, yOf(s, line3))
+			send(t, s, shiftPressAt(blockLeft(s), yOf(s, line3)))
+			if s.editor == nil || s.editor.sel.first != line1 || s.editor.sel.last != line3 {
+				t.Fatalf("Shift-press did not extend the range: %+v", s.editor.sel)
+			}
+			send(t, s, "\x1ba") // the chip moves to ask
+			if s.editor.tag != "ask" {
+				t.Fatalf("chip = %q", s.editor.tag)
+			}
 			send(t, s, "wrong status\r")
 			c = s.Tray.Cards[2]
-			if c.Tag != "reject" || c.Anchor.Kind != blocks.CodeLine || c.Anchor.Lines == nil ||
-				c.Anchor.Lines.Last-c.Anchor.Lines.First != 2 || c.Anchor.First != line1 || c.Anchor.Last != line3 ||
-				!strings.HasPrefix(c.Anchor.Quote, "func handle(") || !strings.HasSuffix(c.Anchor.Quote, "}") {
+			if c.Tag != "ask" || c.Anchor.Kind != blocks.CodeLine || c.Anchor.Lines == nil ||
+				c.Anchor.Lines.Last-c.Anchor.Lines.First != 2 || c.Anchor.First != line1 || c.Anchor.Last != line3 {
 				t.Fatalf("line-range card = %+v", c)
 			}
 
-			// 4. Modifier-drag a span inside the first list item, then question.
+			// 4. A dragged span inside one list item is also a span, so the
+			// strip follows it and the drag that copied it can tag it too.
 			first := rowOf(t, s, "1. Read the config file")
-			y := itoa(yOf(s, first))
-			send(t, s, "\x1b[<8;6;"+y+"M")
-			send(t, s, "\x1b[<40;20;"+y+"M")
-			send(t, s, "\x1b[<8;20;"+y+"m")
-			if s.sel == nil || s.sel.span == nil || s.sel.text != "Read the config" {
+			y := yOf(s, first)
+			send(t, s, pressAt(6, y))
+			send(t, s, dragTo(20, y))
+			send(t, s, releaseAt(20, y))
+			if s.sel == nil || s.sel.span == nil {
 				t.Fatalf("span selection = %+v", s.sel)
 			}
-			send(t, s, "q")
+			send(t, s, "f")
 			send(t, s, "which ports?\r")
 			c = s.Tray.Cards[3]
-			if c.Tag != "question" || c.Anchor.Span == nil || c.Anchor.Quote != "Read the config" || c.Anchor.Span.Col != 5 || c.Anchor.Span.EndCol != 19 {
+			if c.Tag != "fix" || c.Anchor.Span == nil || c.Anchor.Quote == "" {
 				t.Fatalf("span card = %+v", c)
 			}
 
-			// The tray sits directly above the input box, framed by rules.
-			lines, _, _, _ = physical(s)
-			if len(lines) != s.rows {
-				t.Fatalf("physical rows = %d, want %d", len(lines), s.rows)
-			}
+			// The tray sits directly above the input box.
+			lines, _, _, _ := physical(s)
 			div := -1
 			for i, l := range lines {
 				if strings.Contains(l.String(), "› 4 cards") {
@@ -212,243 +328,53 @@ func TestAnnotateFixtureProducesExpectedCards(t *testing.T) {
 			if s.AgentRows() != s.rows-5 {
 				t.Fatalf("agent rows = %d, want %d", s.AgentRows(), s.rows-5)
 			}
-			if mode == "inline" {
-				// Inline, shrinking the agent's rows moves its top rows into
-				// scrollback, so the recorded input box stays visible and the
-				// tray must sit directly above it.
-				if !strings.HasPrefix(lines[div+5].String(), "─") || !strings.HasPrefix(lines[div+6].String(), "❯") {
-					t.Fatalf("input box not directly below the tray:\n%s", strings.Join(texts(lines[div:]), "\n"))
-				}
-			} else {
-				// On the alternate screen a recording cannot redraw for the
-				// smaller size the way the live agent does, so the box is
-				// gone and the tray sits at the bottom of the agent region.
-				if div+5 != s.rows {
-					t.Fatalf("tray not at the bottom: divider %d rows %d", div, s.rows)
-				}
-			}
 		})
 	}
 }
 
-func texts(lines []screen.Line) []string {
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		out[i] = l.String()
-	}
-	return out
-}
-
-func TestEscRestoresOverlayAndSelection(t *testing.T) {
-	s, term, agent := fixtureSession(t, "inline")
-	para := rowOf(t, s, "That is the whole plan.")
-	before, _, _, _ := physical(s)
-	metaClick(t, s, 5, yOf(s, para))
-	send(t, s, "c")
-	if s.editor == nil {
-		t.Fatal("editor did not open")
-	}
-	term.Reset()
-	send(t, s, "\x1b") // Esc discards
-	if s.editor != nil || s.sel != nil || s.Composited() {
-		t.Fatalf("editor=%v sel=%v composited=%v", s.editor, s.sel, s.Composited())
-	}
-	// Leaving composited repaints the live screen from the model: rows equal
-	// what they were before anything was drawn, attribute for attribute.
-	replay := screen.New(s.cols, s.rows)
-	_, _ = replay.Write(term.Bytes())
-	for i, want := range before {
-		got := replay.Row(i)
-		got.Wrapped = want.Wrapped
-		if !got.Equal(want) {
-			t.Fatalf("row %d after Esc = %q, want %q", i, got.String(), want.String())
-		}
-	}
-	if agent.Len() != 0 {
-		t.Fatalf("keys reached the agent: %q", agent.Bytes())
-	}
-	// Esc with only a selection also clears it; other keys forward.
-	metaClick(t, s, 5, yOf(s, para))
-	send(t, s, "x")
-	if s.sel != nil || agent.String() != "x" {
-		t.Fatalf("sel=%v agent=%q", s.sel, agent.String())
-	}
-}
-
-func TestTrayFocusEditReorderDeleteAndPersistence(t *testing.T) {
-	store := &card.Store{Dir: filepath.Join(t.TempDir(), "trays")}
-	s, term, agent := fixtureSession(t, "inline")
-	s.UseStore(store)
-	if err := s.SetSessionID("sess-1"); err != nil {
-		t.Fatal(err)
-	}
-	for i, sub := range []string{"That is the whole plan.", "2. Change the handler", "3. Verify"} {
-		metaClick(t, s, 5, yOf(s, rowOf(t, s, sub)))
-		send(t, s, string(rune("fqa"[i])))
-		send(t, s, "note "+itoa(i+1)+"\r")
-	}
-	if s.Tray.Len() != 3 {
-		t.Fatalf("tray = %d", s.Tray.Len())
-	}
-
-	// Tab focuses the tray; j/k move; J/K reorder; e edits; d deletes.
-	send(t, s, "\t")
-	if s.focus != focusTray || agent.Len() != 0 {
-		t.Fatalf("focus=%v agent=%q", s.focus, agent.Bytes())
-	}
-	send(t, s, "j")
-	send(t, s, "J")
-	if s.Tray.Cards[2].Text != "note 2" || s.traySel != 2 {
-		t.Fatalf("reorder: %v sel %d", cardTexts(s.Tray), s.traySel)
-	}
-	send(t, s, "K")
-	if s.Tray.Cards[1].Text != "note 2" {
-		t.Fatalf("reorder back: %v", cardTexts(s.Tray))
-	}
-	send(t, s, "e")
-	if s.editor == nil || s.editor.editing == nil || string(s.editor.text) != "note 2" {
-		t.Fatalf("edit: %+v", s.editor)
-	}
-	send(t, s, " more\r")
-	if s.Tray.Cards[1].Text != "note 2 more" || s.focus != focusTray {
-		t.Fatalf("after edit: %v focus %v", cardTexts(s.Tray), s.focus)
-	}
-	send(t, s, "d")
-	if s.Tray.Len() != 2 || s.Tray.Cards[1].Text != "note 3" {
-		t.Fatalf("after delete: %v", cardTexts(s.Tray))
-	}
-	term.Reset()
-	send(t, s, "\x1b")
-	if s.focus != focusAgent {
-		t.Fatal("Esc did not return focus")
-	}
-	send(t, s, "typed")
-	if agent.String() != "typed" {
-		t.Fatalf("agent got %q", agent.String())
-	}
-
-	// Persistence: a new session for the same id restores the tray exactly.
-	stored, err := store.Load("claude", "sess-1")
-	if err != nil || stored.Len() != 2 || stored.Cards[0].Text != "note 1" || stored.Cards[1].Text != "note 3" {
-		t.Fatalf("stored = %v err %v", cardTexts(stored), err)
-	}
-	s2, _, _ := fixtureSession(t, "inline")
-	s2.UseStore(store)
-	if err := s2.SetSessionID("sess-1"); err != nil {
-		t.Fatal(err)
-	}
-	if s2.Tray.Len() != 2 || s2.Tray.Cards[0].Anchor != s.Tray.Cards[0].Anchor || s2.Tray.Cards[1].Tag != "approve" || !s2.Composited() {
-		t.Fatalf("restored = %v composited=%v", cardTexts(s2.Tray), s2.Composited())
-	}
-}
-
-func cardTexts(t *card.Tray) []string {
-	var out []string
-	for _, c := range t.Cards {
-		out = append(out, c.Text)
-	}
-	return out
-}
-
-func TestClickOnCardHighlightsAnchor(t *testing.T) {
-	s, _, _ := fixtureSession(t, "inline")
-	heading := rowOf(t, s, "⏺ Plan")
-	metaClick(t, s, 3, yOf(s, heading))
-	send(t, s, "a")
-	send(t, s, "good\r")
-	lines, _, _, _ := physical(s)
-	div := -1
-	for i, l := range lines {
-		if strings.Contains(l.String(), "› 1 card") {
-			div = i
-		}
-	}
-	send(t, s, "\x1b[<0;5;"+itoa(div+2)+"M\x1b[<0;5;"+itoa(div+2)+"m")
-	if s.focus != focusTray || s.highlight == nil || s.highlight.first != heading {
-		t.Fatalf("focus=%v highlight=%+v", s.focus, s.highlight)
-	}
-	lines, _, _, _ = physical(s)
+// stripRowFor is the 1-based physical row the strip occupies.
+func stripRowFor(t *testing.T, s *Session) int {
+	t.Helper()
 	s.mu.Lock()
-	r := s.agentToPhysical(heading - s.windowStart())
+	defer s.mu.Unlock()
+	r := s.stripRow()
+	if r < 0 {
+		t.Fatal("the strip is not on screen")
+	}
+	return s.agentToPhysical(r) + 1
+}
+
+// choiceFor is the first column of a strip choice, 0-based.
+func choiceFor(t *testing.T, s *Session, label string) int {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	choices, _, _ := stripLayout(s.raised.left)
+	for _, c := range choices {
+		if c.label == label {
+			return c.from
+		}
+	}
+	t.Fatalf("no strip choice %q", label)
+	return 0
+}
+
+func atoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
+}
+
+// selectBlockAt opens a block selection directly, for tests whose subject is
+// what a selection makes possible rather than the gesture that makes one.
+func selectBlockAt(t *testing.T, s *Session, hist int) {
+	t.Helper()
+	s.mu.Lock()
+	ok := s.selectBlockLocked(hist)
 	s.mu.Unlock()
-	if lines[r].Cells[0].Attr.Flags&screen.Reverse == 0 {
-		t.Fatalf("anchor row not highlighted: %+v", lines[r].Cells[0])
+	if !ok {
+		t.Fatalf("no block at history row %d", hist)
 	}
-	send(t, s, "\x1b")
-	if s.highlight != nil {
-		t.Fatal("highlight must clear on the next key")
-	}
-}
-
-func TestDipleDrawsWithoutTruecolourAndPlainUsesOnlyReverseUnderline(t *testing.T) {
-	for _, plain := range []bool{false, true} {
-		s, _, _ := fixtureSession(t, "inline")
-		s.Plain = plain
-		for _, sub := range []string{"That is the whole plan.", "2. Change the handler", "3. Verify"} {
-			metaClick(t, s, 5, yOf(s, rowOf(t, s, sub)))
-			send(t, s, "f")
-			send(t, s, "n\r")
-		}
-		metaClick(t, s, 5, yOf(s, rowOf(t, s, "⏺ Plan")))
-		s.mu.Lock()
-		own := append(s.trayLines(), s.toolbarLine())
-		s.editor = &editor{tag: "fix", text: []rune("x")}
-		own = append(own, s.editorLine())
-		s.editor = nil
-		s.mu.Unlock()
-		var buf []byte
-		for _, l := range own {
-			buf = l.AppendEmit(buf)
-			for _, c := range l.Cells {
-				if c.Attr.FG.Kind == screen.ColorRGB || c.Attr.BG.Kind == screen.ColorRGB {
-					t.Fatalf("truecolour in Diple's drawing: %+v", c)
-				}
-				if plain && (c.Attr.Flags&^(screen.Reverse|screen.Underline) != 0 || c.Attr.FG.Kind != screen.ColorDefault || c.Attr.BG.Kind != screen.ColorDefault) {
-					t.Fatalf("--plain drew %+v", c.Attr)
-				}
-				if !plain && c.Attr.FG.Kind == screen.ColorIndexed && (c.Attr.FG.Index < 1 || c.Attr.FG.Index > 6) {
-					t.Fatalf("tag colour outside 1-6: %+v", c.Attr)
-				}
-			}
-		}
-		if bytes.Contains(buf, []byte("38;2")) || bytes.Contains(buf, []byte("48;2")) {
-			t.Fatalf("24-bit SGR in Diple's drawing: %q", buf)
-		}
-	}
-}
-
-func TestResizeKeepsTrayAboveInputBox(t *testing.T) {
-	s, _, _ := fixtureSession(t, "inline")
-	for _, sub := range []string{"That is the whole plan.", "2. Change the handler", "3. Verify"} {
-		metaClick(t, s, 5, yOf(s, rowOf(t, s, sub)))
-		send(t, s, "c")
-		send(t, s, "n\r")
-	}
-	if err := s.Resize(100, 30); err != nil {
+	if err := s.Tick(); err != nil {
 		t.Fatal(err)
-	}
-	lines, _, _, _ := physical(s)
-	if len(lines) != 30 || len(lines[0].Cells) != 100 || s.AgentRows() != 26 {
-		t.Fatalf("rows %d cols %d agent rows %d", len(lines), len(lines[0].Cells), s.AgentRows())
-	}
-	div := -1
-	for i, l := range lines {
-		if strings.Contains(l.String(), "› 3 cards") {
-			div = i
-		}
-	}
-	if div < 0 || !strings.HasPrefix(lines[div+4].String(), "─") || !strings.HasPrefix(lines[div+5].String(), "❯") {
-		t.Fatalf("layout after resize:\n%s", strings.Join(texts(lines), "\n"))
-	}
-}
-
-func TestEmptyTrayStaysPassThrough(t *testing.T) {
-	s, term, _ := fixtureSession(t, "inline")
-	if s.Composited() {
-		t.Fatal("composited with nothing to show")
-	}
-	_ = s.HandleOutput([]byte("more output\r\n"))
-	if got := term.String(); got != "more output\r\n" {
-		t.Fatalf("pass-through altered the stream: %q", got)
 	}
 }

@@ -33,21 +33,26 @@ palette; the agent's output is never repainted with different attributes.
   report behind `diple status`.
 - `internal/keys` — the binding table: every gesture Diple owns, its default
   key, and the user's `bindings.conf` read over the defaults.
-- `internal/attach` — what an instruction card's attachment refers to: a path
+- `internal/clip` — the clipboard ladder: OSC 52 where the host answers for
+  the clipboard, the platform's own command where it does not. It only ever
+  writes; Diple never reads the clipboard.
+- `internal/attach` — what a free card's attachment refers to: a path
   is only a reference, a command is run once and its output travels with the
   card.
 
 ## Pass-through and composited
 
 The session forwards the agent's bytes untouched while Diple owns nothing on
-screen. As soon as a selection, toolbar, editor, search field,
-highlight, or a non-empty tray shows, it composites: the wrapped process is told `rows − tray height`,
-the physical screen is built from the screen model with the tray inserted
-above the agent's input box, and only rows that changed are repainted. When
-the last Diple-owned thing disappears the live screen is repainted from the
-model and the agent's cursor, attribute, and modes are restored. Diple draws
-only with the default colours, the 16 indexed colours, and bold, dim,
-reverse, and underline; `--plain` keeps reverse and underline only.
+screen. As soon as a raise, selection, strip, editor, search field, highlight,
+or a non-empty tray shows, it composites: the wrapped process is told
+`rows − tray height`, the physical screen is built from the screen model with
+the tray inserted above the agent's input box, and only rows that changed are
+repainted. When the last Diple-owned thing disappears the live screen is
+repainted from the model and the agent's cursor, attribute, and modes are
+restored. That repaint-from-the-model is what gives every cell the raise and
+the strip borrow back attribute for attribute. Diple draws only with the
+default colours, the 16 indexed colours, and bold, dim, reverse, and
+underline; `--plain` drops colour and keeps the attributes.
 
 ## Rendering modes
 
@@ -57,19 +62,58 @@ tracking, the agent viewport is the history). Claude Code's `tui: fullscreen`
 setting selects the latter. Every adapter reports the mode from the screen
 model, and alignment runs against whichever history the mode provides.
 
+## The raise, the strip, and the press
+
+Resting the pointer inside a block raises it: its bounding box — from the
+block's smallest indent to one column past its longest row — in reverse video,
+and a moment later a strip on the row beneath it, at the block's own left edge,
+carrying `note`, `fix`, `ask` and, past a divider, `copy`. The strip is opaque,
+writing every cell it covers, and it underlines the tag in force. Only its four
+choices hold the pointer: a pointer anywhere else on that row belongs to what
+the strip covers, so a strip never stands between the user and the block
+beneath it.
+
+The block and its strip are one target, and the raise outlives the pointer by a
+moment so a loose path between them does not lose it. A press means what it
+means when it ends: a press that moves is a selection wherever it started, and
+only a press that comes up where it went down is a press on what lies under it.
+The dwell is what makes a raised block Diple's — a press that lands before it,
+like every wheel event and every press outside a raised block, reaches the
+agent untouched.
+
+**Nothing here is a modifier.** The host's own selection modifier — Shift, or
+Option on macOS — never reaches Diple, which is the whole reason the gesture
+arrives in Terminal.app and iTerm2, where Option is spent on the host's own
+bypass of mouse reporting. The one exception the model makes is a Shift-press
+on a second raised line, which extends a code or diff line range.
+
+## Selection and the clipboard
+
+Diple owns the mouse, so the host stops offering its own drag-selection. Diple
+therefore makes the selection itself: a drag selects across rows and past any
+block's edge and copies when the button comes up, a double-press takes the word
+and a triple-press the whole logical line. What is copied is the transcript's
+text where a transcript covers the rows — so a command that wrapped over three
+rows returns as one line — and the screen's own rows where none does, so
+nothing on screen is ever unselectable. `--copy-on-select=off` leaves the
+clipboard to the explicit `copy`, and `Alt+H` returns the mouse to the host
+entirely.
+
 ## Cards and the tray
 
-A note is anchored in the agent's output; a question and an instruction are
-free text; an overall card is a tray's one closing remark and always holds the
-last place, so nothing reorders past it and a second one edits the first.
-`Alt+N`, or `+` with the tray focused, offers the free kinds on the same
-overlay row the block toolbar uses, and the same one-line editor writes them.
-While an instruction card is being written, a line that reads `@path` or
-`!command` becomes an attachment instead of the card's text and the field
-stays open: a path is compiled as a reference, and a command is run once, then,
-and what it printed travels with the card. `diple stash` sets an agent's saved
-tray aside in one slot and `diple unstash` gives it to that agent's next
-session.
+A card is anchored — pointing at a block or span, carrying one tag: `fix`,
+`ask`, or `note` — or free: untagged prose, which is what the user would
+otherwise have typed into the box. One card per tray may be marked overall; it
+holds the last place, so nothing reorders past it and a second one edits the
+first. `Alt+N`, or `+` with the tray focused, opens the same one-line editor on
+Diple's own overlay row, and `Alt+O` writes the closing remark. While a free
+card is being written, a line that reads `@path` or `!command` becomes an
+attachment instead of the card's text and the field stays open: a path is
+compiled as a reference, and a command is run once, then, and what it printed
+travels with the card. A block that carries a card keeps a tail mark — Diple's
+own `›` one column past the block's last character, in the card's tag colour,
+with the count for more than one. `diple stash` sets an agent's saved tray
+aside in one slot and `diple unstash` gives it to that agent's next session.
 
 ## Adapters
 
@@ -109,8 +153,8 @@ effective table. A bad line there is reported on stderr and skipped — a config
 file must never cost the user their terminal. `Alt+K` selects the topmost
 block in view, `j`/`k` walk blocks, `L` takes a code line and `V` extends the
 range, `v` opens a span on the block's first word and `w`/`b` and `l`/`h` size
-it by word and by character; the toolbar letters then make the card, exactly
-as they do after a click.
+it by word and by character; the strip's own four letters — `n`, `f`, `a`, `c`
+— then make the card or copy, exactly as they do after a press.
 
 The adapter reports when the agent is showing a dialog of its own — a
 permission question, a chooser, a text question. While one is up Diple owns
@@ -138,7 +182,7 @@ conversation aligns the turns it shows and leaves the rest without rows.
 
 - One static binary, no runtime dependencies. Go modules compile in; nothing is
   fetched or spawned at run time except the wrapped agent and a command the
-  user explicitly attaches to an instruction card, which runs once, in the
+  user explicitly attaches to a free card, which runs once, in the
   session's directory, under a timeout and an output cap.
 - Fail open: any failure of Diple's own logic degrades to plain pass-through and
   never leaves the host terminal in raw mode.
@@ -158,14 +202,18 @@ go test ./...
 
 CI runs the same on Linux and macOS and cross-compiles darwin/linux × amd64/arm64.
 
-`scripts/verify-hosts.sh [--plain] [host…]` is the release-boundary check: it
-records a wrapped session in each host the portability list names, types one
-gesture into the hosts R-014 calls driven, and runs `internal/hostcheck` over
-the capture — the envelope asked for and given back, the agent's bytes
-forwarded unchanged with an empty tray, no 24-bit colour from Diple, a card
-made where the host is driven, and the terminal restored. It is not part of
-CI, because it needs those terminals installed; `RELEASE.md` records the
-result with the version each host was verified at.
+`scripts/verify-hosts.sh [--plain] [--manual] [host…]` is the release-boundary
+check: it records a wrapped session in each host the portability list names,
+hands the gesture to the hosts R-014 calls driven, and runs
+`internal/hostcheck` over the capture — the envelope asked for and given back,
+the agent's bytes forwarded unchanged with an empty tray, no 24-bit colour from
+Diple, a card made and a copy taken where the host is driven, and the terminal
+restored. Diple's gestures are ordinary SGR mouse reports, so a host that can
+type into a window can deliver them. `--manual` starts the session and waits
+for the person at the keyboard to make the gesture, which is how a
+pass-through host is shown to deliver it. It is not part of CI, because it
+needs those terminals installed; `RELEASE.md` records the result with the
+version each host was verified at.
 
 `internal/hostcheck` owns the class table: WezTerm, kitty, `tmux`, and `herdr`
 are driven, and every other host is pass-through only. The distinction is the

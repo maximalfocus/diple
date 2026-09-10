@@ -25,7 +25,7 @@ import (
 	"github.com/maximalfocus/diple/internal/wrap"
 )
 
-const usage = `usage: diple [--record <fixture>] [--plain] [--no-marks] <agent> [args…]
+const usage = `usage: diple [--record <fixture>] [--plain] [--marks=off] <agent> [args…]
        diple blocks <transcript>
        diple on|off|status
        diple stash|unstash [<agent>]
@@ -35,17 +35,19 @@ Runs <agent> (for example claude) under Diple. Non-interactive invocations
 (-p/--print, --version, --help) and sessions without a terminal run the real
 agent directly.
 
-  --record <fixture>   write the session as a fixture for replay
-  --plain              draw only with reverse and underline
-  --no-marks           no gutter mark on annotated blocks
-  --no-archive         do not archive sent folds
-  on                   install the shims and put them on PATH
-  off                  remove the shims and the PATH line
-  status               report the shims, PATH, and startup files
-  blocks <transcript>  print the turns and blocks detected in a transcript
-  stash [<agent>]      set the agent's saved tray aside
-  unstash [<agent>]    give the stashed tray back to the next session
-  bindings             print the effective key bindings
+  --record <fixture>      write the session as a fixture for replay
+  --plain                 draw without colour
+  --marks=off             no tail mark on annotated blocks, and no raise
+  --motion=off            draw the raise's final frame only
+  --copy-on-select=off    copy only on an explicit copy, not on every selection
+  --no-archive            do not archive sent folds
+  on                      install the shims and put them on PATH
+  off                     remove the shims and the PATH line
+  status                  report the shims, PATH, and startup files
+  blocks <transcript>     print the turns and blocks detected in a transcript
+  stash [<agent>]         set the agent's saved tray aside
+  unstash [<agent>]       give the stashed tray back to the next session
+  bindings                print the effective key bindings
 `
 
 func main() {
@@ -53,10 +55,12 @@ func main() {
 }
 
 type flags struct {
-	record    string
-	plain     bool
-	noMarks   bool
-	noArchive bool
+	record         string
+	plain          bool
+	noMarks        bool
+	noMotion       bool
+	noCopyOnSelect bool
+	noArchive      bool
 }
 
 func run(args []string) int {
@@ -66,8 +70,18 @@ func run(args []string) int {
 		switch {
 		case a == "--plain":
 			f.plain, args = true, args[1:]
-		case a == "--no-marks":
+		case a == "--marks=off" || a == "--no-marks":
 			f.noMarks, args = true, args[1:]
+		case a == "--marks=on":
+			f.noMarks, args = false, args[1:]
+		case a == "--motion=off":
+			f.noMotion, args = true, args[1:]
+		case a == "--motion=on":
+			f.noMotion, args = false, args[1:]
+		case a == "--copy-on-select=off":
+			f.noCopyOnSelect, args = true, args[1:]
+		case a == "--copy-on-select=on":
+			f.noCopyOnSelect, args = false, args[1:]
 		case a == "--no-archive":
 			f.noArchive, args = true, args[1:]
 		case a == "--record":
@@ -143,7 +157,8 @@ func wrapAgent(name string, args []string, f flags) int {
 		fmt.Fprintf(os.Stderr, "diple: %s\n", c)
 	}
 	code, err := wrap.Run(wrap.Options{
-		Path: path, Name: argv0, Args: args, Record: f.record, Adapter: ad, Keys: table, Plain: f.plain, NoMarks: f.noMarks, NoArchive: f.noArchive,
+		Path: path, Name: argv0, Args: args, Record: f.record, Adapter: ad, Keys: table,
+		Plain: f.plain, NoMarks: f.noMarks, NoMotion: f.noMotion, NoCopyOnSelect: f.noCopyOnSelect, NoArchive: f.noArchive,
 		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 	})
 	if err != nil {

@@ -5,15 +5,22 @@ coding-agent CLI — Claude Code, Codex CLI, pi — in the terminal you already
 use. It leaves the agent's rendering, your theme, and your history exactly as
 they are, and adds two things:
 
-1. **Point at what you mean.** Modifier-click any block the agent printed — a
-   paragraph, a list item, a code line, a diff line — or drag a span of text,
-   in this turn or an earlier one, and attach a short tagged note: fix,
-   question, reject, approve, prefer.
-2. **A tray that grows out of the agent's own input box.** Notes, questions,
-   and instructions pile up as cards while the agent keeps working. One
-   gesture compiles them into a single well-structured message and submits it
-   through the agent's native input. An empty tray has no footprint, and there
-   is only ever one input box on screen.
+1. **Point at what you mean.** Rest the pointer on any block the agent printed
+   — a paragraph, a list item, a code line, a diff line — and the whole block
+   lifts into reverse video, with a strip beneath it offering `note`, `fix`,
+   `ask` and `copy`. Press it, in this turn or an earlier one, and write a
+   short note there. Diple claims no modifier key: pressing a raised block is
+   the whole gesture, so Shift and Option stay your terminal's.
+2. **A tray that grows out of the agent's own input box.** Notes and your own
+   instructions pile up as cards while the agent keeps working. One gesture
+   compiles them into a single well-structured message and submits it through
+   the agent's native input. An empty tray has no footprint, and there is only
+   ever one input box on screen.
+
+Because Diple owns the mouse, it also gives back the selection your terminal
+stops offering: drag to select and copy, double-press for a word, triple-press
+for a line. What lands on the clipboard is the transcript's text, so a command
+that wrapped over three rows comes back as one line.
 
 It replaces the "screenshot, then retype a wall of text" loop with something
 closer to a pull-request review: many pinned comments, sent once. It is
@@ -44,21 +51,31 @@ diple claude     # run one wrapped session without shims
 
 | Gesture | Does |
 |---|---|
-| Modifier-click a block | Select it and show the tag toolbar |
-| Modifier-drag | Select a span inside a block |
-| Click a code or diff line's gutter | Select that line; shift-click extends |
-| `f` `q` `r` `a` `p` `c` | Tag the selection: fix, question, reject, approve, prefer, comment |
+| Rest on a block | Raises it, with the strip beneath: `note` `fix` `ask` │ `copy` |
+| Press the raised block | Opens a note on it, tagged `note` |
+| Press a tag on the strip | Opens the note tagged that way |
+| `n` `f` `a` `c` | The strip's four choices, without moving the pointer |
+| Drag | Selects across rows and copies; inside one block it is a span too |
+| Double-press, triple-press | Copy the word, then the whole line |
+| Shift-press a second raised line | Extend a code or diff line range |
+| `Alt+F` `Alt+A` `Alt+N` | Move the note's tag chip while writing |
+| `Enter` / `Esc` | Save the note; `Esc` keeps what you typed |
 | `Alt+K`, then `j`/`k` | Reach and walk blocks by keyboard |
 | `v`, then `w`/`b`, `l`/`h` | Open and size a span by word or character |
 | `L`, `V` | Take a code line and extend the range |
 | `[` `]` | Jump to the previous or next assistant turn |
 | `/` | Search the transcript and go to the match |
-| `Alt+N` | Write a free question, instruction, or overall card |
+| `Alt+N` / `Alt+O` | Write a free card, or the tray's one closing remark |
 | `Tab` | Move focus between the native box and the tray |
-| `j`/`k`, `J`/`K`, `e`, `d` | In the tray: select, reorder, edit, delete |
+| `j`/`k`, `J`/`K`, `e`, `d`, `×` | In the tray: select, reorder, edit, delete |
 | `Alt+Enter` / `Alt+P` | Send the tray as one message, or paste it without sending |
-| `Alt+H` | Hide the layer for the rest of the session |
+| `Alt+H` | Hide the layer, and give the mouse back to your terminal |
 | Wheel, `End` | Scroll Diple's scrollback and return to live |
+
+A press means what it means when it ends: a press that moves is a selection,
+and only one that comes up where it went down is a press on what lies under
+it. A press that lands before the block has risen reaches the agent untouched,
+as every wheel event does.
 
 `[`, `]`, and `/` are Diple's only while it already owns navigation — the view
 is scrolled, a block is selected, or the tray has focus — so a slash command
@@ -66,10 +83,16 @@ still starts with `/`. Every binding is yours to change in
 `$XDG_CONFIG_HOME/diple/bindings.conf`; `diple bindings` prints the table in
 effect.
 
-An instruction card can carry attachments: `@path` references a file, and
-`!command` runs the command once, then, and carries what it printed.
-`diple stash` sets a tray aside and `diple unstash` gives it back to the next
-session of that agent.
+A free card can carry attachments: `@path` references a file, and `!command`
+runs the command once, then, and carries what it printed. `diple stash` sets a
+tray aside and `diple unstash` gives it back to the next session of that agent.
+
+```
+diple --plain claude              # draw without colour
+diple --marks=off claude          # no tail marks, and no raise with them
+diple --motion=off claude         # draw the raise's final frame only
+diple --copy-on-select=off claude # copy only on an explicit copy
+```
 
 ## Supported agents
 

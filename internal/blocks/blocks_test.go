@@ -86,3 +86,43 @@ func TestEmpty(t *testing.T) {
 		t.Fatalf("blocks: %+v", bs)
 	}
 }
+
+// TestDiffLocation derives the file and new-file line a diff line belongs to,
+// so an anchor inside a diff can name a path and line range rather than quote
+// a line the agent would have to search for.
+func TestDiffLocation(t *testing.T) {
+	body := strings.Join([]string{
+		"--- a/src/auth.ts",
+		"+++ b/src/auth.ts",
+		"@@ -40,6 +42,7 @@ func handle() {",
+		" \tctx := r.Context()",
+		"-\tw.WriteHeader(404)",
+		"+\tw.WriteHeader(http.StatusNotFound)",
+		"+\tlog.Print(ctx)",
+		" }",
+	}, "\n")
+	for _, tc := range []struct {
+		line int
+		path string
+		want int
+	}{
+		{3, "src/auth.ts", 42}, // the context line the hunk starts on
+		{4, "src/auth.ts", 43}, // a removed line reads at the position it left
+		{5, "src/auth.ts", 43},
+		{6, "src/auth.ts", 44},
+		{7, "src/auth.ts", 45},
+	} {
+		path, line, ok := DiffLocation(body, tc.line)
+		if !ok || path != tc.path || line != tc.want {
+			t.Fatalf("line %d: got %q:%d ok=%v, want %q:%d", tc.line, path, line, ok, tc.path, tc.want)
+		}
+	}
+	// A body that names no file has no location, and the anchor keeps its
+	// quotation instead.
+	if _, _, ok := DiffLocation("some\nplain\nlines", 1); ok {
+		t.Fatal("a diff without headers must have no location")
+	}
+	if _, _, ok := DiffLocation(body, 99); ok {
+		t.Fatal("a line past the body must have no location")
+	}
+}

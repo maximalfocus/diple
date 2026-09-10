@@ -3,7 +3,7 @@
 # Diple gesture into it where R-014 calls the host driven, and checks the
 # capture. Run it from the repository root:
 #
-#   scripts/verify-hosts.sh [--plain] [host...]
+#   scripts/verify-hosts.sh [--plain] [--manual] [host...]
 #
 # With no host arguments it does every host it can start on this machine and
 # says which ones it skipped, so the release checklist can record both. A host
@@ -20,21 +20,57 @@ mkdir -p "$out"
 ctl="$(mktemp -d "${TMPDIR:-/tmp}/diple-ctl.XXXXXX")"
 trap 'rm -rf "$ctl"' EXIT
 diple="$out/diple"
-agent="$root/scripts/fake-agent.sh"
+# The canned agent is installed under the name of an adapter Diple knows, so a
+# wrapped session has blocks to raise: an agent with no adapter is passed
+# through untouched by design, and the annotate gesture has nothing to point
+# at. The adapter finds no transcript for this session and falls back to
+# paragraph granularity, which is exactly the path R-004 promises.
+agent_dir="$ctl/bin"
+agent="$agent_dir/claude"
 plain=""
-if [ "${1:-}" = "--plain" ]; then
-	plain="--plain"
-	shift
-fi
+manual=""
+while :; do
+	case "${1:-}" in
+	--plain) plain="--plain"; shift ;;
+	--manual) manual="1"; shift ;;
+	*) break ;;
+	esac
+done
 
 go build -o "$diple" "$root/cmd/diple" || exit 1
+mkdir -p "$agent_dir"
+cp "$root/scripts/fake-agent.sh" "$agent"
+chmod +x "$agent"
 
 capture_for() { printf '%s/%s%s.capture.jsonl' "$out" "$1" "${plain:+.plain}"; }
-wrapped() { printf '%s --record %s %s %s' "$diple" "$(capture_for "$1")" "$plain" "$agent"; }
+# wrapped runs the session in a directory of its own. The adapter looks for the
+# transcript of the session it is wrapping under the working directory, and a
+# checkout that has been worked in with the real agent has transcripts there:
+# aligning the canned agent's rows against one of those would leave every block
+# without rows, and nothing to raise, for a reason that has nothing to do with
+# the host.
+wrapped() {
+	printf 'cd %s && PATH=%s:$PATH DIPLE_FAKE_AGENT_SECONDS=%s %s --record %s %s claude' \
+		"$ctl" "$agent_dir" "${DIPLE_FAKE_AGENT_SECONDS:-25}" "$diple" "$(capture_for "$1")" "$plain"
+}
 
-# The gesture typed into a driven host: open the free-card chooser, write a
-# question card, and let the tray draw.
-gesture=$'\033nqhello from the host check\r'
+# The gesture handed to a driven host, in the order R-005 and R-015 ask for.
+# It claims no modifier: a drag over the agent's output, which selects and
+# copies, then the pointer resting on a block until it rises and a press on it,
+# which opens the note the card is written in.
+#
+# The drag comes first, while the tray is still empty and the agent's rows have
+# not moved under it. Diple's own gestures are ordinary SGR mouse reports, so a
+# host that can type into a window can deliver them, and the dwell that raises
+# a block is real time — which is why each part is handed over on its own.
+drag_press=$'\033[<0;3;7M'
+drag_move=$'\033[<32;24;7M'
+drag_release=$'\033[<0;24;7m'
+rest=$'\033[<35;6;3M'
+press=$'\033[<0;6;3M'
+release=$'\033[<0;6;3m'
+note=$'hello from the host check\r'
+gesture_parts=("$drag_press" "$drag_move" "$drag_release" "$rest" "$press" "$release" "$note")
 
 # app_bundle prints the path of a macOS app bundle, looking in /Applications
 # and then in ~/Applications, where Homebrew puts a cask when /Applications is
@@ -71,6 +107,60 @@ host_version() {
 	esac
 }
 
+# wait_for_gesture holds the run while the person at the keyboard makes the
+# gesture in a host nothing can type into from outside.
+wait_for_gesture() {
+	local host="$1" pid="${2:-0}"
+	if [ -n "${DIPLE_DRIVE_CMD:-}" ]; then
+		echo "driving $host (pid $pid) with $DIPLE_DRIVE_CMD" >&2
+		$DIPLE_DRIVE_CMD "$host" "$pid" || return 1
+		return 0
+	fi
+	cat >&2 <<-EOM
+
+	  $host is open with a wrapped session in it. In that window:
+	    1. drag across two rows of the agent's output and let go — it selects
+	       and copies;
+	    2. press Alt+N (Option+N on macOS), type a note, and press Enter — it
+	       makes a card;
+	    3. quit the agent so the capture is written.
+	  Then press Enter here.
+	EOM
+	read -r _ </dev/tty || true
+}
+
+# host_pid is the process that owns the host's window, which a driving command
+# needs so it can refuse to type into anything else.
+host_pid() {
+	local pat
+	case "$1" in
+	terminal.app) pat='Utilities/Terminal.app/Contents/MacOS/Terminal' ;;
+	iterm2) pat='iTerm.app/Contents/MacOS/iTerm2' ;;
+	ghostty) pat='Ghostty.app/Contents/MacOS/ghostty' ;;
+	*) echo 0; return ;;
+	esac
+	# ps rather than pgrep: pgrep's match is restricted in some sessions and
+	# silently finds nothing, which would hand a driving command a pid of 0
+	# and let it type into whatever happened to be in front.
+	ps -eo pid,comm | awk -v pat="$pat" '$2 ~ pat {print $1; exit}'
+}
+
+# wait_for_settled holds until the session that is writing the capture has
+# exited. Waiting for the file to stop growing is not enough: a gesture is over
+# well before the session is, and the recorder still has its last bytes to
+# write when it closes.
+wait_for_settled() {
+	local file="$1" tries=0
+	while [ "$tries" -lt 120 ]; do
+		if ! ps -eo args | grep -q "[-]-record $file"; then
+			return 0
+		fi
+		sleep 1
+		tries=$((tries + 1))
+	done
+	return 0
+}
+
 wait_for_capture() {
 	local file="$1" tries=0
 	while [ "$tries" -lt 45 ]; do
@@ -90,8 +180,14 @@ start_host() {
 	rm -f "$(capture_for "$host")"
 	# A launcher script, so a host that only knows how to open a file can
 	# still start a wrapped session.
-	launcher="$ctl/launch-$host.sh"
-	printf '#!/bin/sh\nexec %s\n' "$cmd" >"$launcher"
+	# A stable path, not one under the run's temporary directory: a host that
+	# asks before running a script asks again for every new path it sees, and
+	# a launcher whose name changed each run could never be approved once.
+	launcher="$out/launch-$host.sh"
+	# A host launched through the window server does not inherit this shell's
+	# environment, so everything the session needs is already inside $cmd.
+	# No exec: the command is a shell line of its own, not one executable.
+	printf '#!/bin/sh\n%s\n' "$cmd" >"$launcher"
 	chmod +x "$launcher"
 	case "$host" in
 	tmux)
@@ -99,7 +195,10 @@ start_host() {
 		tmux kill-session -t diple-verify 2>/dev/null
 		tmux new-session -d -s diple-verify -x 100 -y 30 "$cmd" || return 4
 		sleep 3
-		tmux send-keys -t diple-verify Escape n q "hello from the host check" Enter || return 4
+		for part in "${gesture_parts[@]}"; do
+			tmux send-keys -t diple-verify -l -- "$part" || return 4
+			sleep 1
+		done
 		;;
 	herdr)
 		command -v herdr >/dev/null || return 3
@@ -113,11 +212,17 @@ start_host() {
 			printf '%s\n' "$pane" >"$ctl/herdr.pane"
 			herdr pane run "$pane" "$cmd" >/dev/null 2>&1 || return 4
 			sleep 4
-			herdr pane send-text "$pane" "$gesture" >/dev/null 2>&1 || return 4
+			for part in "${gesture_parts[@]}"; do
+				herdr pane send-text "$pane" "$part" >/dev/null 2>&1 || return 4
+				sleep 1
+			done
 		else
 			herdr agent start diple-verify --cwd "$root" --no-focus -- sh -c "$cmd" >/dev/null 2>&1 || return 4
 			sleep 4
-			herdr agent send diple-verify "$gesture" >/dev/null 2>&1 || return 4
+			for part in "${gesture_parts[@]}"; do
+				herdr agent send diple-verify "$part" >/dev/null 2>&1 || return 4
+				sleep 1
+			done
 		fi
 		;;
 	wezterm)
@@ -133,14 +238,20 @@ start_host() {
 		pane="$(wezterm cli spawn --new-window --pane-id 0 -- sh -c "$cmd" 2>/dev/null)" || return 4
 		[ -n "$pane" ] || return 4
 		sleep 4
-		wezterm cli send-text --no-paste --pane-id "$pane" "$gesture" >/dev/null 2>&1 || return 4
+		for part in "${gesture_parts[@]}"; do
+			printf '%s' "$part" | wezterm cli send-text --no-paste --pane-id "$pane" >/dev/null 2>&1 || return 4
+			sleep 1
+		done
 		;;
 	kitty)
 		command -v kitty >/dev/null || return 3
 		kitty -o allow_remote_control=yes --listen-on "unix:$ctl/kitty.sock" --detach sh -c "$cmd" || return 4
 		sleep 5
 		[ -S "$ctl/kitty.sock" ] || return 4
-		kitty @ --to "unix:$ctl/kitty.sock" send-text "$gesture" >/dev/null 2>&1 || return 4
+		for part in "${gesture_parts[@]}"; do
+			kitty @ --to "unix:$ctl/kitty.sock" send-text -- "$part" >/dev/null 2>&1 || return 4
+			sleep 1
+		done
 		;;
 	ghostty)
 		# Ghostty offers no way to type into a running window from outside,
@@ -157,11 +268,14 @@ start_host() {
 		sleep 5
 		;;
 	iterm2)
-		# `open -a` runs a script in a terminal without asking for the
-		# automation permission an AppleScript would need.
 		bundle="$(app_bundle iTerm.app)" || return 3
+		# A window of its own, so a run never lands in a window the user is
+		# already working in, and the one to drive is unambiguous. `open -a`
+		# is kept for a machine that will not answer the automation prompt.
+		# `open -a` runs the launcher in a window of the application's own
+		# making, which is the path its mouse reporting is reliable through.
 		open -a "$bundle" "$launcher" >/dev/null 2>&1 || return 4
-		sleep 4
+		sleep 5
 		;;
 	terminal.app)
 		[ -d /System/Applications/Utilities/Terminal.app ] || return 3
@@ -177,6 +291,11 @@ start_host() {
 
 cleanup_hosts() {
 	tmux kill-session -t diple-verify 2>/dev/null
+	# A window this run opened is closed again, so a later run is never left
+	# choosing between windows and never writes a capture twice over.
+	if [ -s "$ctl/iterm2.window" ]; then
+		osascript -e 'tell application "iTerm2" to close (every window whose id is '"$(cat "$ctl/iterm2.window")"')' >/dev/null 2>&1
+	fi
 	if [ -s "$ctl/herdr.pane" ]; then
 		herdr pane close "$(cat "$ctl/herdr.pane")" >/dev/null 2>&1
 	fi
@@ -204,11 +323,19 @@ for host in "${hosts[@]}"; do
 		;;
 	2) status=1; continue ;;
 	esac
+	if [ -n "$manual" ]; then
+		if ! wait_for_gesture "$host" "$(host_pid "$host")"; then
+			echo "FAIL $host: the gesture could not be made" >&2
+			status=1
+			continue
+		fi
+	fi
 	if ! wait_for_capture "$file"; then
 		echo "FAIL $host: no capture was written"
 		status=1
 		continue
 	fi
+	wait_for_settled "$file"
 	go run "$root/internal/hostcheck" --host "$host" --host-version "$(host_version "$host")" ${plain:+--plain} "$file" || status=1
 done
 cleanup_hosts

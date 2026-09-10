@@ -14,38 +14,27 @@ import (
 	"github.com/maximalfocus/diple/internal/blocks"
 )
 
-// Kind is a card's kind.
+// Kind is a card's kind: what it is made of, not what is to be done with it.
 type Kind string
 
-// Card kinds. A note is anchored in the agent's output; a question and an
-// instruction are free text the user wrote; an overall card is the one
-// closing remark of a tray and always compiles last.
+// Card kinds. An anchored card points at a block or span of the agent's
+// output and carries one tag; a free card is untagged prose, which is what
+// the user would otherwise have typed into the box.
 const (
-	Note        Kind = "note"
-	Question    Kind = "question"
-	Instruction Kind = "instruction"
-	Overall     Kind = "overall"
+	Anchored Kind = "anchored"
+	Free     Kind = "free"
 )
 
-// FreeKinds are the kinds created from the tray rather than from a block,
-// in chooser order.
-var FreeKinds = []Kind{Question, Instruction, Overall}
-
-// KindByLetter returns the free kind whose name starts with r, or "".
-func KindByLetter(r rune) Kind {
-	for _, k := range FreeKinds {
-		if rune(k[0]) == r {
-			return k
-		}
-	}
-	return ""
-}
-
-// Tag is the tag of a note card, chosen from the toolbar.
+// Tag is what an anchored card asks for. A free card has none, since a card
+// with nothing to point at is simply the text the user would have typed.
 type Tag string
 
-// The six tags, in toolbar order. Their index maps to indexed colours 1–6.
-var Tags = []Tag{"fix", "question", "reject", "approve", "prefer", "comment"}
+// The three tags, in strip order: note is the default, fix asks for a
+// change, ask asks a question. Their index maps to indexed colours 1–3.
+var Tags = []Tag{"note", "fix", "ask"}
+
+// DefaultTag is the tag a press on a raised block opens the editor with.
+const DefaultTag Tag = "note"
 
 // TagByLetter returns the tag whose name starts with r, or "" when none.
 func TagByLetter(r rune) Tag {
@@ -57,7 +46,7 @@ func TagByLetter(r rune) Tag {
 	return ""
 }
 
-// Color returns the indexed colour (1–6) of a tag, 0 when unknown.
+// Color returns the indexed colour (1–3) of a tag, 0 when unknown.
 func (t Tag) Color() uint8 {
 	for i, tag := range Tags {
 		if tag == t {
@@ -83,8 +72,15 @@ type Anchor struct {
 	Absolute int `json:"absolute"`
 	// Quote is the anchored text, trimmed from the end to about 120 runes.
 	Quote string `json:"quote"`
-	// Ordinal is the list item's ordinal for prefer notes, 0 otherwise.
+	// Ordinal is the list item's ordinal, whatever the tag, so the compiled
+	// message can say "option 2". Zero for other kinds.
 	Ordinal int `json:"ordinal,omitempty"`
+	// Path and LineFirst/LineLast are the file and line range a diff anchor
+	// names, when the diff the lines came from named one. Compiling prefers
+	// them to a quotation, since a path is what the agent can act on.
+	Path      string `json:"path,omitempty"`
+	LineFirst int    `json:"lineFirst,omitempty"`
+	LineLast  int    `json:"lineLast,omitempty"`
 	// Span narrows the anchor to the text between two columns of the
 	// block's rows, when the note was made by dragging.
 	Span *Span `json:"span,omitempty"`
@@ -152,8 +148,15 @@ type Card struct {
 	Tag    Tag    `json:"tag,omitempty"`
 	Anchor Anchor `json:"anchor"`
 	Text   string `json:"text"`
-	// Attachments belong to instruction cards.
+	// Overall marks the tray's one closing remark, which holds the last
+	// place. It is a mark on a card rather than a kind of its own, because
+	// what makes it last is where it sits, not what it is made of.
+	Overall bool `json:"overall,omitempty"`
+	// Attachments belong to free cards.
 	Attachments []Attachment `json:"attachments,omitempty"`
+	// Fenced records that the text arrived as a paste of several lines, so
+	// compiling puts it in a fence and the agent reads it as what it is.
+	Fenced bool `json:"fenced,omitempty"`
 }
 
 // Tray is the ordered list of cards for one agent session.
@@ -168,7 +171,7 @@ type Tray struct {
 func (t *Tray) Add(c *Card) *Card {
 	t.next++
 	c.ID = time.Now().UTC().Format("20060102T150405") + "-" + itoa(t.next)
-	if c.Kind == Overall {
+	if c.Overall {
 		if existing := t.Overall(); existing != nil {
 			existing.Text = c.Text
 			return existing
@@ -194,7 +197,7 @@ func (t *Tray) Overall() *Card {
 
 func (t *Tray) overallIndex() int {
 	for i, c := range t.Cards {
-		if c.Kind == Overall {
+		if c.Overall {
 			return i
 		}
 	}

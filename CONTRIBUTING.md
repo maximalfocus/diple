@@ -10,7 +10,7 @@ go build ./cmd/diple
 
 Go is the only dependency, and the binary has no runtime dependencies: nothing
 is fetched or spawned at run time except the wrapped agent and a command a
-user explicitly attaches to an instruction card.
+user explicitly attaches to a free card.
 
 ## Verification
 

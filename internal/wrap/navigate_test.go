@@ -121,7 +121,7 @@ func TestNoteOnEarlierTurnCompilesWithItsTurnReference(t *testing.T) {
 	if viewTop(s) != row {
 		t.Fatalf("view top = %d, want turn 2 first row %d", viewTop(s), row)
 	}
-	metaClick(t, s, 5, yOf(s, row))
+	selectBlockAt(t, s, row)
 	if s.sel == nil || s.sel.turn != 2 {
 		t.Fatalf("selection = %+v, want turn 2", s.sel)
 	}
@@ -132,7 +132,7 @@ func TestNoteOnEarlierTurnCompilesWithItsTurnReference(t *testing.T) {
 	}
 	agent.Reset()
 	send(t, s, "\x1b\r")
-	want := "Review (1 item).\n\n1. [fix] In your reply 3 turns ago: > \"turn bravo body\"\n   tighten this"
+	want := "[fix] In your reply 3 turns ago: > \"turn bravo body\"\ntighten this"
 	if got := agent.String(); got != pasteStart+want+pasteEnd+"\r" {
 		t.Fatalf("fold:\n got %q\nwant %q", got, pasteStart+want+pasteEnd+"\r")
 	}
@@ -233,7 +233,7 @@ func TestFullscreenTurnJumpForwardsWheelUntilTheTurnIsVisible(t *testing.T) {
 		t.Fatal("not on the alternate screen")
 	}
 	// A selection is one of the states where the navigation keys are Diple's.
-	metaClick(t, s, 5, yOf(s, 0))
+	selectBlockAt(t, s, 0)
 	if s.sel == nil || s.sel.turn != 1 {
 		t.Fatalf("selection = %+v, want turn 1", s.sel)
 	}
@@ -275,7 +275,7 @@ func TestFullscreenJumpFailsOpenWithoutMouseTracking(t *testing.T) {
 	}
 	paintAlt(t, s, []string{turnRow(1), "", "  ran a tool", "", "❯ "})
 	agent.Reset()
-	metaClick(t, s, 5, yOf(s, 0))
+	selectBlockAt(t, s, 0)
 	agent.Reset()
 	send(t, s, "]")
 	if s.nav != nil {
@@ -288,7 +288,7 @@ func TestFullscreenJumpFailsOpenWithoutMouseTracking(t *testing.T) {
 
 func TestFullscreenSearchHighlightsTheMatchWhenItComesIntoView(t *testing.T) {
 	s, _, agent := altSession(t, 3, []string{turnRow(3), "", "  ran a tool", "", "❯ "})
-	metaClick(t, s, 5, yOf(s, 0)) // a selection makes `/` Diple's
+	selectBlockAt(t, s, 0) // a selection makes `/` Diple's
 	if s.sel == nil {
 		t.Fatal("no selection")
 	}

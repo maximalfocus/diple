@@ -91,6 +91,9 @@ func TestMouseSwallowedUnlessAgentTracks(t *testing.T) {
 		t.Fatalf("agent without tracking received %q", agent.Bytes())
 	}
 	_ = s.HandleOutput([]byte("\x1b[?1000h"))
+	// Far enough from the first press that this one is a press of its own
+	// rather than the second of a double-press.
+	advance(s, multiPress)
 	if err := s.HandleInput(click); err != nil {
 		t.Fatal(err)
 	}
@@ -106,9 +109,18 @@ func TestSplitMouseReportAcrossReads(t *testing.T) {
 	if agent.Len() != 0 {
 		t.Fatalf("partial report leaked: %q", agent.Bytes())
 	}
+	// The tail arrives and the report is one press again. A press is held
+	// until it comes up, so only the typed byte goes on at once.
 	_ = s.HandleInput([]byte(";3Mx"))
-	if got := agent.String(); got != "\x1b[<0;5;3Mx" {
-		t.Fatalf("agent got %q", got)
+	if s.press == nil {
+		t.Fatal("the reassembled press was not taken")
+	}
+	if got := agent.String(); got != "x" {
+		t.Fatalf("agent got %q, want the typed byte alone", got)
+	}
+	_ = s.HandleInput([]byte("\x1b[<0;5;3m"))
+	if got := agent.String(); got != "x\x1b[<0;5;3M\x1b[<0;5;3m" {
+		t.Fatalf("after the release the agent got %q", got)
 	}
 }
 

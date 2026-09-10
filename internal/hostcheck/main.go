@@ -15,7 +15,12 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/maximalfocus/diple/internal/adapter"
+	_ "github.com/maximalfocus/diple/internal/adapter/claude"
+	_ "github.com/maximalfocus/diple/internal/adapter/codex"
+	_ "github.com/maximalfocus/diple/internal/adapter/pi"
 	"github.com/maximalfocus/diple/internal/record"
 	"github.com/maximalfocus/diple/internal/wrap"
 )
@@ -23,8 +28,8 @@ import (
 // truecolour is an SGR that selects a 24-bit colour, which Diple never emits.
 var truecolour = regexp.MustCompile(`\x1b\[[0-9;]*\b(38|48);2;`)
 
-// styling is any SGR Diple emits while drawing. Under --plain only reverse
-// and underline are allowed.
+// sgr is any SGR Diple emits while drawing. Under --plain it may still use
+// the bold, dim, reverse, and underline attributes, but no colour at all.
 var sgr = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
 
 // driven names the hosts R-014 puts in the driven class: those offering a
@@ -77,7 +82,7 @@ func check(host, path string, plain bool) []string {
 	// First pass: the agent's bytes alone, with nothing typed. This is what
 	// R-002 promises in every host — the terminal sees exactly what the bare
 	// CLI would have written.
-	bare, _, err := replay(rec, false, plain)
+	bare, _, _, err := replay(rec, false, plain)
 	if err != nil {
 		return []string{err.Error()}
 	}
@@ -94,7 +99,7 @@ func check(host, path string, plain bool) []string {
 	}
 
 	// Second pass: the session as it was actually driven in the host.
-	driven, cards, err := replay(rec, true, plain)
+	driven, cards, copies, err := replay(rec, true, plain)
 	if err != nil {
 		return append(failures, err.Error())
 	}
@@ -105,6 +110,11 @@ func check(host, path string, plain bool) []string {
 		}
 		if drawn == "" {
 			failures = append(failures, "a gesture was typed in this host but Diple drew nothing")
+		}
+		// R-015: a copy that no host delivers is no copy, so a capture that
+		// carries a gesture must also carry the copy that gesture made.
+		if copies == 0 {
+			failures = append(failures, "a gesture was typed in this host but nothing reached the clipboard")
 		}
 	}
 	if truecolour.MatchString(drawn) {
@@ -128,35 +138,54 @@ func check(host, path string, plain bool) []string {
 // replay runs a capture through a fresh session, in the drawing mode it was
 // recorded in, optionally feeding the input the host recorded. It returns
 // what the terminal received and how many cards the session ended with.
-func replay(rec *record.Recording, withInput, plain bool) (string, int, error) {
+//
+// The capture stamps every event with the time since the session started, so
+// the replay runs on that clock: the dwell that raises a block is real time in
+// the host, and a replay that ignored it could never reproduce the gesture.
+func replay(rec *record.Recording, withInput, plain bool) (string, int, int, error) {
 	var terminal bytes.Buffer
 	sess := wrap.NewSession(&terminal, &bytes.Buffer{}, rec.Header.Cols, rec.Header.Rows, nil)
 	sess.Plain = plain
+	// The replay must be the session that ran, adapter and all: without one
+	// there are no blocks to raise, and the annotate gesture would appear not
+	// to have arrived for a reason that has nothing to do with the host. The
+	// replay finds no transcript, so alignment falls back to paragraphs, which
+	// is the same path the recorded session took.
+	if ad, ok := adapter.For(rec.Header.Agent); ok {
+		sess.UseAdapter(ad, rec.Header.Agent)
+	}
+	base := time.Unix(0, 0)
+	at := base
+	sess.SetClock(func() time.Time { return at })
 	if err := sess.Start(); err != nil {
-		return "", 0, fmt.Errorf("session did not start: %v", err)
+		return "", 0, 0, fmt.Errorf("session did not start: %v", err)
 	}
 	for _, ev := range rec.Events {
+		at = base.Add(ev.At)
+		if err := sess.Tick(); err != nil {
+			return "", 0, 0, fmt.Errorf("the raise failed: %v", err)
+		}
 		switch ev.Kind {
 		case record.KindOutput:
 			if err := sess.HandleOutput(ev.Data); err != nil {
-				return "", 0, fmt.Errorf("forwarding failed: %v", err)
+				return "", 0, 0, fmt.Errorf("forwarding failed: %v", err)
 			}
 		case record.KindInput:
 			if !withInput {
 				continue
 			}
 			if err := sess.HandleInput(ev.Data); err != nil {
-				return "", 0, fmt.Errorf("input handling failed: %v", err)
+				return "", 0, 0, fmt.Errorf("input handling failed: %v", err)
 			}
 		case record.KindResize:
 			_ = sess.Resize(ev.Cols, ev.Rows)
 		}
 	}
-	cards := sess.Tray.Len()
+	cards, copies := sess.Tray.Len(), sess.Copies()
 	if err := sess.Stop(); err != nil {
-		return "", 0, fmt.Errorf("session did not stop cleanly: %v", err)
+		return "", 0, 0, fmt.Errorf("session did not stop cleanly: %v", err)
 	}
-	return terminal.String(), cards, nil
+	return terminal.String(), cards, copies, nil
 }
 
 // agentBytes is everything the wrapped agent wrote.
@@ -170,15 +199,19 @@ func agentBytes(rec *record.Recording) string {
 	return b.String()
 }
 
-// exercised reports whether a Diple gesture was typed into the host, which is
-// when Diple must draw and a card must appear.
+// exercised reports whether a Diple gesture reached the host, which is when
+// Diple must draw, a card must appear, and a copy must reach the clipboard.
+// The gesture claims no modifier: it is the pointer resting on a block, a
+// press on it, or the free-card key.
 func exercised(rec *record.Recording) bool {
 	for _, ev := range rec.Events {
 		if ev.Kind != record.KindInput {
 			continue
 		}
-		if bytes.Contains(ev.Data, []byte("\x1bn")) || bytes.Contains(ev.Data, []byte("\x1b[<8;")) {
-			return true
+		for _, sig := range [][]byte{[]byte("\x1bn"), []byte("\x1b[<35;"), []byte("\x1b[<32;")} {
+			if bytes.Contains(ev.Data, sig) {
+				return true
+			}
 		}
 	}
 	return false
@@ -194,15 +227,20 @@ func drawnByDiple(driven, bare string) string {
 	return driven[i:]
 }
 
-// disallowedUnderPlain names the first attribute Diple used that --plain
-// forbids: anything but reverse and underline, and any colour.
+// disallowedUnderPlain names the first thing Diple drew that --plain forbids.
+// --plain drops colour entirely and leaves the bold, dim, reverse, and
+// underline attributes, so any colour parameter is a failure and those
+// attributes are not.
 func disallowedUnderPlain(drawn string) string {
+	allowed := map[string]bool{
+		"": true, "0": true, // reset
+		"1": true, "2": true, "22": true, // bold, dim, and their reset
+		"4": true, "24": true, // underline and its reset
+		"7": true, "27": true, // reverse and its reset
+	}
 	for _, m := range sgr.FindAllStringSubmatch(drawn, -1) {
 		for _, p := range strings.Split(m[1], ";") {
-			switch p {
-			case "", "0", "4", "7", "24", "27":
-				continue
-			default:
+			if !allowed[p] {
 				return "SGR " + p
 			}
 		}

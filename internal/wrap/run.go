@@ -18,6 +18,7 @@ import (
 
 	"github.com/maximalfocus/diple/internal/adapter"
 	"github.com/maximalfocus/diple/internal/card"
+	"github.com/maximalfocus/diple/internal/clip"
 	"github.com/maximalfocus/diple/internal/fold"
 	"github.com/maximalfocus/diple/internal/keys"
 	"github.com/maximalfocus/diple/internal/record"
@@ -31,10 +32,14 @@ type Options struct {
 	Record string   // fixture path, or "" for none
 	// Adapter, when set, follows the session transcript.
 	Adapter adapter.Adapter
-	// Plain restricts Diple's drawing to reverse and underline.
+	// Plain drops colour from Diple's drawing.
 	Plain bool
-	// NoMarks disables the gutter mark on anchored blocks.
+	// NoMarks disables the tail mark on anchored blocks, and the raise with it.
 	NoMarks bool
+	// NoMotion draws the raise's final frame only.
+	NoMotion bool
+	// NoCopyOnSelect leaves the clipboard to the explicit copy alone.
+	NoCopyOnSelect bool
 	// Keys is the binding table; the zero value means the defaults.
 	Keys keys.Table
 	// NoArchive disables the sent-fold archive.
@@ -95,6 +100,9 @@ func Run(opts Options) (exitCode int, err error) {
 	session := NewSession(opts.Stdout, ptmx, cols, rows, rec)
 	session.Plain = opts.Plain
 	session.Marks = !opts.NoMarks
+	session.NoMotion = opts.NoMotion
+	session.CopyOnSelect = !opts.NoCopyOnSelect
+	session.Clip = clip.NewWriter(os.Getenv)
 	session.SetPTYRows = func(r int) {
 		if c, _, err := term.GetSize(fd); err == nil {
 			_ = pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(r), Cols: uint16(c)})
@@ -138,6 +146,23 @@ func Run(opts Options) (exitCode int, err error) {
 	if err := session.Start(); err != nil {
 		return 1, err
 	}
+
+	// The raise's own clock. It repaints only what Diple owns, so it never
+	// delays a forwarded byte.
+	ticker := time.NewTicker(raiseDwell / 2)
+	defer ticker.Stop()
+	tickDone := make(chan struct{})
+	defer close(tickDone)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				_ = session.Tick()
+			case <-tickDone:
+				return
+			}
+		}
+	}()
 
 	// Agent output → terminal.
 	outDone := make(chan struct{})

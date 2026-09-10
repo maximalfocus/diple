@@ -97,7 +97,7 @@ func (s *Session) setSelectionLocked(rows []string, ref blockRef) {
 		text = strings.Join(rows[b.First:b.Last+1], "\n")
 	}
 	s.sel = &selection{turn: ref.turn, block: ref.index, kind: b.Kind, first: b.First, last: b.Last,
-		text: text, ordinal: b.Ordinal, absolute: s.dropped() + b.First}
+		text: text, ordinal: b.Ordinal, absolute: s.dropped() + b.First, parent: -1}
 	s.editor, s.highlight, s.focus = nil, nil, focusAgent
 	s.ensureVisibleLocked(b.First, b.Last)
 }
@@ -151,7 +151,7 @@ func (s *Session) selectFirstLineLocked() bool {
 			}
 			s.sel = &selection{turn: t.Turn, block: bi, kind: b.Kind, first: b.First, last: b.Last,
 				text: rows[b.First], lines: &card.LineRange{First: bi, Last: bi},
-				absolute: s.dropped() + b.First}
+				absolute: s.dropped() + b.First, parent: b.Parent}
 			s.editor, s.highlight, s.focus = nil, nil, focusAgent
 			s.ensureVisibleLocked(b.First, b.Last)
 			return true
