@@ -38,42 +38,72 @@ pass-through check, and a host that is absent is reported apart from one that
 is present and could not be driven. `scripts/verify-hosts.sh --plain`
 additionally requires that Diple's own drawing carried no colour.
 
-Diple's gestures are ordinary SGR mouse reports, so the gesture handed to a
-driven host is the real one R-005 and R-015 describe: a drag across the agent's
-output, which selects and copies, then a free card written from the tray. The
+Diple's gestures are ordinary SGR mouse reports and ordinary keys, so the
+gesture handed to a driven host is the real one R-005 and R-015 describe: a
+drag across the agent's output, which selects and copies, then the pointer
+resting on a block until it rises and a press on it, which opens the note. The
 check reads the copy from the session's own count rather than from the bytes,
 because the clipboard ladder ends in OSC 52 on some hosts and in the platform's
 own command on others; which rung carried it is the ladder's business, and it
 has its own tests and its own live check.
 
-`scripts/verify-hosts.sh --manual <host>` starts the session and waits for the
-person at the keyboard to make the gesture. It is how a pass-through host is
-shown to deliver R-005 and R-015, since nothing can type into one from outside.
+The canned agent is installed under the name of an adapter Diple knows and the
+session runs in a directory of its own. Both matter: an agent with no adapter
+is passed through untouched by design, so there would be no block to raise, and
+a checkout that has been worked in with the real agent has transcripts under it
+that the canned rows would align against, leaving every block without rows for
+a reason that has nothing to do with the host.
 
-Each row was recorded twice, once in each drawing mode, and names the host
-version it ran against as R-012 does for an adapter's CLI.
+`scripts/verify-hosts.sh --manual <host>` starts the session and waits for the
+person at the keyboard to make the gesture, then checks the capture the same
+way. It is how a pass-through host is shown to deliver R-005 and R-015, since
+nothing can type into one from outside. Setting `DIPLE_DRIVE_CMD` to a command
+that synthesises the gesture runs that instead of waiting; the repository ships
+no such command, because it is per-platform and needs the machine's own input
+permission.
+
+Each row names the host version it ran against, as R-012 does for an adapter's
+CLI, and says which drawing modes it was recorded in.
 
 | Host | Class | Result | Version | Machine |
 |---|---|---|---|---|
-| WezTerm | driven | pass, gesture + card + copy | 20240203-110809-5046fc22 | macOS 26.6 arm64 |
-| kitty | driven | pass, gesture + card + copy | 0.48.2 | macOS 26.6 arm64 |
-| `tmux` | driven | pass, gesture + card + copy | 3.7c | macOS 26.6 arm64 |
-| `herdr` | driven | pass, gesture + card + copy | 0.7.4 | macOS 26.6 arm64 |
-| Terminal.app | pass-through | pass, forwarding/envelope/restore | 2.15 | macOS 26.6 arm64 |
-| iTerm2 | pass-through | **not re-run** | 3.7.0 | — |
-| Ghostty | pass-through | **not re-run** | 1.3.1 | — |
+| WezTerm | driven | pass, gesture + card + copy, both modes | 20240203-110809-5046fc22 | macOS 26.6 arm64 |
+| kitty | driven | pass, gesture + card + copy, both modes | 0.48.2 | macOS 26.6 arm64 |
+| `tmux` | driven | pass, gesture + card + copy, both modes | 3.7c | macOS 26.6 arm64 |
+| `herdr` | driven | pass, gesture + card + copy, both modes | 0.7.4 | macOS 26.6 arm64 |
+| Terminal.app | pass-through | pass, live gesture + card + copy; `--plain` outstanding | 2.15 | macOS 26.6 arm64 |
+| Ghostty | pass-through | pass, live gesture + card + copy; `--plain` outstanding | 1.3.1 | macOS 26.6 arm64 |
+| iTerm2 | pass-through | **outstanding** | 3.7.0 | — |
 
-The four driven hosts were re-verified against this release's gesture in both
-drawing modes. Terminal.app was re-verified in its class.
+The copy was read back from the machine rather than inferred: with a sentinel on
+the pasteboard before each run, `pbpaste` after it returned the dragged text.
+kitty and WezTerm carried it through OSC 52; `tmux`, `herdr`, Terminal.app and
+Ghostty through the platform rung. The first `tmux` run is what found the
+multiplexer defect in the ladder — OSC 52 went to `tmux`, `tmux` forwarded it to
+Terminal.app, Terminal.app ignored it, and the sentinel was still there.
 
-**Outstanding, and the reason this checklist is not complete:** R-005 and R-015
-require the gesture and the copy to be shown live in every host, the
-pass-through class included, because a gesture no host delivers is no gesture.
-That needs `scripts/verify-hosts.sh --manual terminal.app iterm2 ghostty`, run
-by a person at the keyboard, and for iTerm2 and Ghostty it needs a session that
-can launch them: launching a GUI application that is not already running was
-not possible from the environment this release was prepared in, and `open -a`
-returned without starting either.
+Terminal.app and Ghostty settle the question R-005 was reworked for. Both spend
+no Option on Diple, because Diple now claims no modifier at all: the pointer
+rested on a block, the block rose, a press on it opened the note, and the card
+came out — in a host that nothing can type into from outside.
+
+**Outstanding, and none of it a known failure:**
+
+- iTerm2 has not been re-verified against this gesture. Its mouse reports do
+  reach Diple — an earlier capture of its own carries them — so this is a gap
+  in the evidence. iTerm2 asks before running a script it has not seen, and the
+  launcher is kept at a stable path for that reason: approve it once, ticking
+  "Suppress this message permanently", and the run proceeds unattended
+  thereafter.
+- The `--plain` capture for Terminal.app and Ghostty. Both passed in the
+  ordinary drawing mode; only the second mode is missing.
+
+Run `scripts/verify-hosts.sh --manual <host>` and the same with `--plain`, and
+make the gesture by hand: drag across two rows of the reply, then rest the
+pointer on a block, press it, type a note, and press Enter. A driving command
+in `DIPLE_DRIVE_CMD` can make it instead, but it cannot run against a locked
+screen — the window server delivers nothing there, which is worth knowing
+before leaving a run unattended.
 
 ## Left for the release itself
 

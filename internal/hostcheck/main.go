@@ -17,6 +17,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/maximalfocus/diple/internal/adapter"
+	_ "github.com/maximalfocus/diple/internal/adapter/claude"
+	_ "github.com/maximalfocus/diple/internal/adapter/codex"
+	_ "github.com/maximalfocus/diple/internal/adapter/pi"
 	"github.com/maximalfocus/diple/internal/record"
 	"github.com/maximalfocus/diple/internal/wrap"
 )
@@ -142,6 +146,14 @@ func replay(rec *record.Recording, withInput, plain bool) (string, int, int, err
 	var terminal bytes.Buffer
 	sess := wrap.NewSession(&terminal, &bytes.Buffer{}, rec.Header.Cols, rec.Header.Rows, nil)
 	sess.Plain = plain
+	// The replay must be the session that ran, adapter and all: without one
+	// there are no blocks to raise, and the annotate gesture would appear not
+	// to have arrived for a reason that has nothing to do with the host. The
+	// replay finds no transcript, so alignment falls back to paragraphs, which
+	// is the same path the recorded session took.
+	if ad, ok := adapter.For(rec.Header.Agent); ok {
+		sess.UseAdapter(ad, rec.Header.Agent)
+	}
 	base := time.Unix(0, 0)
 	at := base
 	sess.SetClock(func() time.Time { return at })
