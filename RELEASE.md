@@ -14,6 +14,9 @@ re-checked, the domain is registered, and the repository is made public.
 - [x] Adapters for Claude Code, Codex CLI, and pi, each with fixtures recorded
       from a real session at a pinned version.
 - [x] Public README, contributor guide, and adapter-authoring guide.
+- [x] Host and theme verification re-run against the gesture R-005 and R-015
+      describe: all seven hosts, both drawing modes, each carrying the card and
+      the copy the gesture made.
 - [x] Homebrew formula in `packaging/homebrew/diple.rb`, with the release URLs
       and checksums left for the release itself.
 - [x] Name re-check, run at the release boundary: `brew search diple` returns
@@ -71,9 +74,9 @@ CLI, and says which drawing modes it was recorded in.
 | kitty | driven | pass, gesture + card + copy, both modes | 0.48.2 | macOS 26.6 arm64 |
 | `tmux` | driven | pass, gesture + card + copy, both modes | 3.7c | macOS 26.6 arm64 |
 | `herdr` | driven | pass, gesture + card + copy, both modes | 0.7.4 | macOS 26.6 arm64 |
-| Terminal.app | pass-through | pass, live gesture + card + copy; `--plain` outstanding | 2.15 | macOS 26.6 arm64 |
-| Ghostty | pass-through | pass, live gesture + card + copy; `--plain` outstanding | 1.3.1 | macOS 26.6 arm64 |
-| iTerm2 | pass-through | **outstanding** | 3.7.0 | — |
+| Terminal.app | pass-through | pass, live gesture + card + copy, both modes | 2.15 | macOS 26.6 arm64 |
+| Ghostty | pass-through | pass, live gesture + card + copy, both modes | 1.3.1 | macOS 26.6 arm64 |
+| iTerm2 | pass-through | pass, live gesture + card + copy, both modes | 3.7.0 | macOS 26.6 arm64 |
 
 The copy was read back from the machine rather than inferred: with a sentinel on
 the pasteboard before each run, `pbpaste` after it returned the dragged text.
@@ -87,23 +90,12 @@ no Option on Diple, because Diple now claims no modifier at all: the pointer
 rested on a block, the block rose, a press on it opened the note, and the card
 came out — in a host that nothing can type into from outside.
 
-**Outstanding, and none of it a known failure:**
-
-- iTerm2 has not been re-verified against this gesture. Its mouse reports do
-  reach Diple — an earlier capture of its own carries them — so this is a gap
-  in the evidence. iTerm2 asks before running a script it has not seen, and the
-  launcher is kept at a stable path for that reason: approve it once, ticking
-  "Suppress this message permanently", and the run proceeds unattended
-  thereafter.
-- The `--plain` capture for Terminal.app and Ghostty. Both passed in the
-  ordinary drawing mode; only the second mode is missing.
-
-Run `scripts/verify-hosts.sh --manual <host>` and the same with `--plain`, and
-make the gesture by hand: drag across two rows of the reply, then rest the
-pointer on a block, press it, type a note, and press Enter. A driving command
-in `DIPLE_DRIVE_CMD` can make it instead, but it cannot run against a locked
-screen — the window server delivers nothing there, which is worth knowing
-before leaving a run unattended.
+All three pass-through hosts were driven with real synthetic mouse and key
+events against the running window, since nothing can type into one from
+outside. Two things a run needs to know: the screen must be unlocked, because
+the window server delivers nothing to a locked one; and a host that asks before
+running a script asks again for every path it has not seen, which is why the
+launcher is kept at a stable path under the captures directory.
 
 ## Left for the release itself
 
