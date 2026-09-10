@@ -3,6 +3,8 @@ package wrap
 import (
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -109,12 +111,24 @@ func (t *Tracker) tick() {
 	}
 	t.mu.Unlock()
 	if first && t.onFound != nil {
-		id := ""
-		if tr != nil {
-			id = tr.SessionID
-		}
-		t.onFound(id)
+		t.onFound(sessionKey(tr, path))
 	}
+}
+
+// sessionKey identifies the session a tray belongs to. The transcript's own id
+// is the right name for it, but a transcript Diple could not parse — one from a
+// CLI version the adapter does not pin — still identifies its session by the
+// file it lives in. What a transcript's contents decide is what can be aligned,
+// never whether the cards written against it are worth keeping.
+func sessionKey(tr *adapter.Transcript, path string) string {
+	if tr != nil && tr.SessionID != "" {
+		return tr.SessionID
+	}
+	if path == "" {
+		return ""
+	}
+	name := filepath.Base(path)
+	return strings.TrimSuffix(name, filepath.Ext(name))
 }
 
 func (t *Tracker) setErr(err error) {
