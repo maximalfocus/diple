@@ -4,7 +4,7 @@
 # reports the same idle, working and blocked states for both. Run it from the
 # repository root on a machine where the agent is installed and logged in:
 #
-#   scripts/verify-identity.sh [--cards] [--env KEY=VALUE]... [--block <prompt>] <herdr|tmux> <agent> [-- <agent args>]
+#   scripts/verify-identity.sh [--cards] [--env KEY=VALUE]... [--block <prompt>] [--cwd <dir>] <herdr|tmux> <agent> [-- <agent args>]
 #
 # It builds Diple from this checkout and shims the agent in a directory of its
 # own, so the user's own shims, startup files and Diple are never touched: the
@@ -18,8 +18,12 @@
 # asks approval for, and the question is declined; --block replaces the prompt.
 # An agent that runs commands without asking is asked to ask for this run only,
 # through its own arguments or --env, leaving the user's configuration alone:
-#   codex:    -- --ask-for-approval untrusted
+#   claude:   -- --permission-mode default   (it may start in auto mode)
+#   codex:    -- --sandbox read-only --ask-for-approval on-request
 #   opencode: --env 'OPENCODE_CONFIG_CONTENT={"permission":{"bash":"ask"}}'
+#
+# --cwd runs the agents in a directory they already trust, which the build
+# never depends on; it defaults to this checkout.
 #
 # The check: in every phase the wrapped pane is named as the agent was typed
 # (a CLI behind a version-numbered file, or run by a runtime such as node, is
@@ -34,6 +38,7 @@
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
+work="$root"
 cards=""
 extra_env=()
 blocking_prompt='Use your shell tool to run exactly this command and nothing else: touch /tmp/diple-identity-probe' 
@@ -42,6 +47,7 @@ while :; do
 	--cards) cards=1; shift ;;
 	--env) extra_env+=("${2:?--env needs KEY=VALUE}"); shift 2 ;;
 	--block) blocking_prompt="${2:?--block needs a prompt}"; shift 2 ;;
+	--cwd) work="${2:?--cwd needs a directory}"; shift 2 ;;
 	*) break ;;
 	esac
 done
@@ -106,18 +112,18 @@ start() {
 	local label="$1" cmd="$2" pane
 	case "$host" in
 	tmux)
-		tmux new-session -d -s "$label" -x 120 -y 36 -c "$root" "$cmd" || return 1
+		tmux new-session -d -s "$label" -x 120 -y 36 -c "$work" "$cmd" || return 1
 		echo "$label"
 		;;
 	herdr)
 		if [ -n "$herdr_v08" ]; then
-			pane="$(herdr tab create --cwd "$root" --label "$label" 2>/dev/null |
+			pane="$(herdr tab create --cwd "$work" --label "$label" 2>/dev/null |
 				sed -n 's/.*"root_pane":{[^}]*"pane_id":"\([^"]*\)".*/\1/p')"
 			[ -n "$pane" ] || return 1
 			herdr pane run "$pane" "$cmd" >/dev/null 2>&1 || return 1
 			echo "$pane"
 		else
-			herdr agent start "$label" --cwd "$root" --no-focus -- sh -c "$cmd" >/dev/null 2>&1 || return 1
+			herdr agent start "$label" --cwd "$work" --no-focus -- sh -c "$cmd" >/dev/null 2>&1 || return 1
 			echo "$label"
 		fi
 		;;
@@ -228,6 +234,13 @@ name_of() { sed -n "s/^$1 $2 .*name=\([^ ]*\).*/\1/p" "$3" | head -1; }
 for phase in $(awk '{print $2}' "$report.bare" "$report.wrapped" | sort -u); do
 	b="$(name_of bare "$phase" "$report.bare")"
 	w="$(name_of wrapped "$phase" "$report.wrapped")"
+	# A pane the host never listed says nothing about its name.
+	for side in "bare:$b" "wrapped:$w"; do
+		if [ -z "${side#*:}" ] && [ -n "$(sed -n "/^${side%%:*} $phase /p" "$report.${side%%:*}")" ]; then
+			echo "FAIL ${side%%:*} $phase: the host did not list the pane at all"
+			status=1
+		fi
+	done
 	if [ -n "$(sed -n "/^wrapped $phase /p" "$report.wrapped")" ] && [ "$w" != "$agent" ] && [ "$w" != "$b" ]; then
 		echo "FAIL wrapped $phase: the host named the pane '$w', neither '$agent' nor the bare CLI's '$b'"
 		status=1
