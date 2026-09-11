@@ -23,10 +23,9 @@ type staticSource struct{ tr *adapter.Transcript }
 
 func (s staticSource) Transcript() (*adapter.Transcript, error) { return s.tr, nil }
 
-// fixtureDir stays on 2.1.266: the journeys' pointer rows were read off that
-// fixture's geometry. At 2.1.268 the input box sits one row higher, so the
-// first card pushes the heading into scrollback and resting on the card
-// scrolls to it, which moves the tray to the bottom (see issue #27).
+// fixtureDir is the fixture the journeys' pointer rows were read off. At
+// 2.1.268 the input box sits one row higher, so a journey that needs that
+// geometry names its fixture through fixtureSessionAt.
 const fixtureDir = "../adapter/claude/testdata/2.1.266"
 
 // advance moves the session's own clock forward, which is how a test drives
@@ -38,15 +37,21 @@ func advance(s *Session, d time.Duration) {
 	s.now = func() time.Time { return at }
 }
 
-// fixtureSession replays a recorded Claude Code session through a Session
-// with the Claude adapter and the matching transcript.
+// fixtureSession replays the journeys' recorded Claude Code session.
 func fixtureSession(t *testing.T, mode string) (*Session, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
-	rec, err := record.Open(filepath.Join(fixtureDir, mode+".recording.jsonl"))
+	return fixtureSessionAt(t, fixtureDir, mode)
+}
+
+// fixtureSessionAt replays the recorded Claude Code session in dir through a
+// Session with the Claude adapter and the matching transcript.
+func fixtureSessionAt(t *testing.T, dir, mode string) (*Session, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	rec, err := record.Open(filepath.Join(dir, mode+".recording.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := os.Open(filepath.Join(fixtureDir, mode+".transcript.jsonl"))
+	f, err := os.Open(filepath.Join(dir, mode+".transcript.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

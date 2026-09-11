@@ -96,7 +96,10 @@ type Session struct {
 
 	cols, rows int // physical terminal size
 	back       int // rows scrolled up from live; 0 is live
-	pending    []byte
+	// revealed is set while back was last moved to show a card's anchor, so
+	// the tray keeps its place; it means nothing while back is 0.
+	revealed bool
+	pending  []byte
 
 	agentMouseReset bool
 
@@ -743,6 +746,7 @@ func (s *Session) Scroll(delta int) error {
 }
 
 func (s *Session) scrollLocked(delta int) error {
+	s.revealed = false
 	target := s.back + delta
 	if target < 0 {
 		target = 0

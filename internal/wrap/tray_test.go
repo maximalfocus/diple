@@ -11,43 +11,61 @@ import (
 )
 
 // TestRestingOnACardRaisesItsAnchor: a card is read against what it points at
-// without pressing anything.
+// without pressing anything, and it stays under the pointer while its anchor
+// is shown. At 2.1.268 the first card pushes the anchor into scrollback, so
+// resting on the card scrolls to it.
 func TestRestingOnACardRaisesItsAnchor(t *testing.T) {
-	s, _, _ := fixtureSession(t, "inline")
-	heading := rowOf(t, s, "⏺ Plan")
-	dwellOn(t, s, 6, yOf(s, heading))
-	pressRaised(t, s, blockLeft(s), yOf(s, heading))
-	send(t, s, "good\r")
-	lines, _, _, _ := physical(s)
-	div := -1
-	for i, l := range lines {
-		if strings.Contains(l.String(), "› 1 card") {
-			div = i
-		}
-	}
-	if div < 0 {
-		t.Fatalf("no tray divider in %q", texts(lines))
-	}
-	// The pointer only rests on the card; nothing is pressed.
-	send(t, s, motionAt(5, div+2))
-	if s.highlight == nil || s.highlight.first != heading {
-		t.Fatalf("resting on a card did not raise its anchor: %+v", s.highlight)
-	}
-	lines, _, _, _ = physical(s)
-	s.mu.Lock()
-	r := s.agentToPhysical(heading - s.windowStart())
-	s.mu.Unlock()
-	if lines[r].Cells[0].Attr.Flags&screen.Reverse == 0 {
-		t.Fatalf("anchor row not raised: %+v", lines[r].Cells[0])
-	}
-	// Pressing the card opens it for editing in place.
-	send(t, s, pressAt(5, div+2)+releaseAt(5, div+2))
-	if s.editor == nil || s.editor.editing != s.Tray.Cards[0] {
-		t.Fatalf("pressing a card did not edit it in place: %+v", s.editor)
-	}
-	send(t, s, " and more\r")
-	if s.Tray.Cards[0].Text != "good and more" {
-		t.Fatalf("edited card = %q", s.Tray.Cards[0].Text)
+	for _, c := range []struct {
+		dir     string
+		scrolls bool
+	}{
+		{fixtureDir, false},
+		{"../adapter/claude/testdata/2.1.268", true},
+	} {
+		t.Run(filepath.Base(c.dir), func(t *testing.T) {
+			s, _, _ := fixtureSessionAt(t, c.dir, "inline")
+			heading := rowOf(t, s, "⏺ Plan")
+			dwellOn(t, s, 6, yOf(s, heading))
+			pressRaised(t, s, blockLeft(s), yOf(s, heading))
+			send(t, s, "good\r")
+			lines, _, _, _ := physical(s)
+			div := -1
+			for i, l := range lines {
+				if strings.Contains(l.String(), "› 1 card") {
+					div = i
+				}
+			}
+			if div < 0 {
+				t.Fatalf("no tray divider in %q", texts(lines))
+			}
+			// The pointer only rests on the card; nothing is pressed.
+			send(t, s, motionAt(5, div+2))
+			if s.highlight == nil || s.highlight.first != heading {
+				t.Fatalf("resting on a card did not raise its anchor: %+v", s.highlight)
+			}
+			if s.Scrolled() != c.scrolls {
+				t.Fatalf("scrolled = %v, want %v", s.Scrolled(), c.scrolls)
+			}
+			lines, _, _, _ = physical(s)
+			if !strings.Contains(lines[div+1].String(), "good") {
+				t.Fatalf("the card left the pointer: row %d is %q", div+1, lines[div+1].String())
+			}
+			s.mu.Lock()
+			r := s.agentToPhysical(heading - s.windowStart())
+			s.mu.Unlock()
+			if lines[r].Cells[0].Attr.Flags&screen.Reverse == 0 {
+				t.Fatalf("anchor row not raised: %+v", lines[r].Cells[0])
+			}
+			// Pressing the card opens it for editing in place.
+			send(t, s, pressAt(5, div+2)+releaseAt(5, div+2))
+			if s.editor == nil || s.editor.editing != s.Tray.Cards[0] {
+				t.Fatalf("pressing a card did not edit it in place: %+v", s.editor)
+			}
+			send(t, s, " and more\r")
+			if s.Tray.Cards[0].Text != "good and more" {
+				t.Fatalf("edited card = %q", s.Tray.Cards[0].Text)
+			}
+		})
 	}
 }
 
