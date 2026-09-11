@@ -102,9 +102,13 @@ for e in ${extra_env[@]+"${extra_env[@]}"}; do quoted_env+=" $(printf '%q' "$e")
 # `herdr tab` alone prints its help and exits non-zero, so the help is read
 # first and matched after.
 herdr_v08=""
+herdr_prompt=""
 if [ "$host" = herdr ]; then
 	tab_help="$(herdr tab 2>&1 || true)"
 	case "$tab_help" in *"tab create"*) herdr_v08=1 ;; esac
+	# `agent prompt` arrived after `tab create`, so it is checked for itself.
+	agent_help="$(herdr agent 2>&1 || true)"
+	case "$agent_help" in *"agent prompt"*) herdr_prompt=1 ;; esac
 fi
 
 # start runs cmd in a new pane and prints the handle later calls take.
@@ -162,11 +166,11 @@ escape() { type_text "$1" $'\033'; }
 # expects and sends Enter; typed text followed by a carriage return can land
 # in an agent's composer as a newline instead of submitting it.
 prompt() {
-	if [ "$host" = herdr ] && [ -n "$herdr_v08" ]; then
+	if [ "$host" = herdr ] && [ -n "$herdr_prompt" ]; then
 		herdr agent prompt "$1" "$2" >/dev/null 2>&1
 	elif [ "$host" = herdr ]; then
-		# On herdr 0.7 the text is typed and a typed carriage return submits
-		# it; its `pane send-keys enter` does not.
+		# A herdr without `agent prompt` gets the text typed and a typed
+		# carriage return to submit it; its `pane send-keys enter` does not.
 		type_text "$1" "$2"
 		sleep 0.3
 		enter "$1"
