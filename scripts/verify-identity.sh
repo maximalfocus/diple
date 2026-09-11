@@ -165,9 +165,11 @@ prompt() {
 	if [ "$host" = herdr ] && [ -n "$herdr_v08" ]; then
 		herdr agent prompt "$1" "$2" >/dev/null 2>&1
 	elif [ "$host" = herdr ]; then
-		herdr pane send-text "$1" "$2" >/dev/null 2>&1
+		# On herdr 0.7 the text is typed and a typed carriage return submits
+		# it; its `pane send-keys enter` does not.
+		type_text "$1" "$2"
 		sleep 0.3
-		herdr pane send-keys "$1" enter >/dev/null 2>&1
+		enter "$1"
 	else
 		type_text "$1" "$2"
 		enter "$1"
