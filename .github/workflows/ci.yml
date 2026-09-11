@@ -1,20 +1,23 @@
 name: ci
 
+# The verification tiers. `gate` is the one check a landing reads: it always
+# runs and fails unless every tier-1 to tier-4 job and the host-evidence check
+# succeeded. CONTRIBUTING.md describes each tier.
 on:
   push:
     branches: [main]
   pull_request:
+    # edited: the host evidence is named in the pull request's body, so the
+    # gate reads it again when the body changes.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  # Tier 1: static and build.
+  static:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -24,12 +27,13 @@ jobs:
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: vet
         run: go vet ./...
-      - name: test
-        run: go test -race ./...
+      - name: go mod tidy
+        run: go mod tidy -diff
 
-  cross-compile:
+  build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         goos: [darwin, linux]
         goarch: [amd64, arm64]
@@ -44,3 +48,124 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: go build -o /dev/null ./cmd/diple
+
+  # Tier 2: unit and session, in a random order every run.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: test
+        run: go test -race -shuffle=on -count=1 ./...
+
+  # Tier 3: the adapters' pinned fixtures and one committed capture per host
+  # and drawing mode, replayed against this build.
+  replay:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: adapter fixtures
+        run: go test -count=1 ./internal/adapter/...
+      - name: host captures
+        run: go run ./internal/hostcheck replay testdata/hosts
+
+  # Tier 4: live headless hosts, driven by the same script developers run.
+  live:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        host: [tmux, herdr]
+    runs-on: ${{ matrix.os }}
+    env:
+      # The herdr release the script's control interface is written against.
+      HERDR_VERSION: v0.8.2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: provision ${{ matrix.host }}
+        run: |
+          case "${{ matrix.host }}" in
+          tmux)
+            if [ "$RUNNER_OS" = Linux ]; then
+              sudo apt-get update -q && sudo apt-get install -y -q tmux
+            else
+              brew install tmux
+            fi
+            ;;
+          herdr)
+            case "$RUNNER_OS-$(uname -m)" in
+            Linux-x86_64) asset=herdr-linux-x86_64 ;;
+            Linux-aarch64) asset=herdr-linux-aarch64 ;;
+            macOS-arm64) asset=herdr-macos-aarch64 ;;
+            macOS-x86_64) asset=herdr-macos-x86_64 ;;
+            *) echo "no herdr build for $RUNNER_OS $(uname -m)"; exit 1 ;;
+            esac
+            mkdir -p "$HOME/.local/bin"
+            curl -fsSL -o "$HOME/.local/bin/herdr" \
+              "https://github.com/herdrdev/herdr/releases/download/$HERDR_VERSION/$asset"
+            chmod +x "$HOME/.local/bin/herdr"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            ;;
+          esac
+      - name: verify ${{ matrix.host }} in both drawing modes
+        run: |
+          if [ "${{ matrix.host }}" = herdr ]; then
+            # A headless server of its own, which the CLI finds by session name.
+            export HERDR_SESSION=diple-ci
+            herdr --session diple-ci server > "$RUNNER_TEMP/herdr.log" 2>&1 &
+            for _ in $(seq 1 30); do
+              [ -S "$HOME/.config/herdr/sessions/diple-ci/herdr.sock" ] && break
+              sleep 1
+            done
+            [ -S "$HOME/.config/herdr/sessions/diple-ci/herdr.sock" ] || { cat "$RUNNER_TEMP/herdr.log"; exit 1; }
+          fi
+          scripts/verify-hosts.sh "${{ matrix.host }}"
+          scripts/verify-hosts.sh --plain "${{ matrix.host }}"
+
+  # Tier 5's CI half: a change outside the documentation allowlist carries
+  # head-bound evidence for every host and drawing mode.
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: host evidence
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: scripts/evidence.sh check
+
+  gate:
+    if: always()
+    needs: [static, build, test, replay, live, evidence]
+    runs-on: ubuntu-latest
+    steps:
+      - name: every tier succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          # A skipped or cancelled job is not a pass.
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' > /dev/null

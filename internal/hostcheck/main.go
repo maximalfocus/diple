@@ -4,8 +4,11 @@
 // without 24-bit colour, drew the tray when it had cards, and left the
 // terminal as it found it.
 //
-// It is the release-boundary check behind `scripts/verify-hosts.sh`, and it
-// reads a capture written by `diple --record`.
+// It is the check behind `scripts/verify-hosts.sh`, and it reads a capture
+// written by `diple --record`. Its subcommands are the verification tiers'
+// uses of it: `replay` replays the committed captures (tier 3), `report` files
+// a passing capture as head-bound evidence and `evidence` verifies that
+// evidence (tier 5), and `classify` decides whether a change needs it.
 package main
 
 import (
@@ -47,6 +50,11 @@ var drivenHosts = map[string]bool{
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		if run, ok := subcommands[os.Args[1]]; ok {
+			os.Exit(run(os.Args[2:]))
+		}
+	}
 	host := flag.String("host", "", "the host the capture came from")
 	version := flag.String("host-version", "", "the version of the host it came from")
 	plain := flag.Bool("plain", false, "the capture was recorded with --plain")
@@ -201,14 +209,16 @@ func agentBytes(rec *record.Recording) string {
 
 // exercised reports whether a Diple gesture reached the host, which is when
 // Diple must draw, a card must appear, and a copy must reach the clipboard.
-// The gesture claims no modifier: it is the pointer resting on a block, a
-// press on it, or the free-card key.
+// The gesture claims no modifier: it is a press — on a raised block, or the
+// start of a drag — or the free-card key. The pointer merely crossing a
+// pass-through host's window, or its wheel, reports motion that makes no card,
+// and counting it turned a person's hand on the mouse into a failure.
 func exercised(rec *record.Recording) bool {
 	for _, ev := range rec.Events {
 		if ev.Kind != record.KindInput {
 			continue
 		}
-		for _, sig := range [][]byte{[]byte("\x1bn"), []byte("\x1b[<35;"), []byte("\x1b[<32;")} {
+		for _, sig := range [][]byte{[]byte("\x1bn"), []byte("\x1b[<0;")} {
 			if bytes.Contains(ev.Data, sig) {
 				return true
 			}

@@ -123,28 +123,32 @@ func TestTrackerTickDiscoversRefreshesAndKeepsLastGood(t *testing.T) {
 func TestTrackerLoopRunsAndStops(t *testing.T) {
 	cwd := t.TempDir()
 	fa := &fileAdapter{}
-	var mu sync.Mutex
-	var found []string
-	tr := NewTracker(fa, cwd, func(id string) { mu.Lock(); found = append(found, id); mu.Unlock() })
+	// The loop announces the transcript it discovers, after storing it, so the
+	// test waits on that rather than on the clock. A second announcement must
+	// never block the loop, so it is counted, not waited for.
+	found := make(chan string, 4)
+	tr := NewTracker(fa, cwd, func(id string) {
+		select {
+		case found <- id:
+		default:
+		}
+	})
 	tr.poll = 10 * time.Millisecond
 	writeAt(t, filepath.Join(cwd, "transcript.txt"), "hello", time.Now().Add(-time.Minute))
 	tr.Start()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if tx, _ := tr.Transcript(); tx != nil {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	// The deadline only detects a loop that never discovers anything.
+	select {
+	case <-found:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the loop never discovered the transcript")
 	}
 	tr.Stop()
 	tx, err := tr.Transcript()
 	if err != nil || tx == nil || tx.Turns[0].Blocks[0].Text != "hello" {
 		t.Fatalf("loop did not discover: %+v %v", tx, err)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(found) != 1 {
-		t.Fatalf("onFound = %v", found)
+	if n := len(found); n != 0 {
+		t.Fatalf("onFound was called %d more times", n)
 	}
 	// Stop is idempotent.
 	tr.Stop()

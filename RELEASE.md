@@ -97,9 +97,23 @@ the window server delivers nothing to a locked one; and a host that asks before
 running a script asks again for every path it has not seen, which is why the
 launcher is kept at a stable path under the captures directory.
 
+## Check enforcement
+
+Every pull request runs the verification tiers `CONTRIBUTING.md` describes,
+and `gate` is the check a landing reads. On the account's current plan GitHub
+refuses both rulesets and branch protection for a private repository
+(`Upgrade to GitHub Pro or make this repository public`, checked on
+2026-09-11), so server enforcement cannot be enabled before publication. Until
+then the landing procedure enforces it: `scripts/gate-status.sh <pr>` must
+report `gate` green on the pull request's current head.
+
 ## Left for the release itself
 
 - [ ] Register `getdiple.sh`.
 - [ ] Cut the release, fill the formula's URLs and checksums, publish the tap.
+- [ ] Once the repository is public, configure a `main` ruleset that requires
+      the `gate` check and forbids direct pushes, and verify both: a direct
+      push to `main` is refused, and a pull request whose `gate` is red cannot
+      merge.
 - [ ] Make the repository public. This is a separate, explicitly invoked step —
       publication is never part of an implementation run.
