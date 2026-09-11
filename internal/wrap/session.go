@@ -100,6 +100,9 @@ type Session struct {
 	// the tray keeps its place; it means nothing while back is 0.
 	revealed bool
 	pending  []byte
+	// titles picks the agent's window titles out of its output, for the
+	// host while the agent's bytes are not forwarded as they come.
+	titles titles
 
 	agentMouseReset bool
 
@@ -376,8 +379,19 @@ func (s *Session) HandleOutput(p []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var err error
+	seqs := s.titles.scan(p)
 	if s.back == 0 && !s.composited {
 		err = writeAll(s.term, p)
+	} else {
+		// The screen model keeps no titles, and neither a composited paint
+		// nor scrollback forwards the agent's bytes, so the agent's window
+		// title goes to the host on its own. A host that names or reads the
+		// pane by it keeps seeing the agent's, cards in the tray or not.
+		for _, seq := range seqs {
+			if e := writeAll(s.term, seq); e != nil && err == nil {
+				err = e
+			}
+		}
 	}
 	before := s.Model.ScrolledOff()
 	s.agentMouseReset = false
