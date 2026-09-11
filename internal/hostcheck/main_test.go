@@ -41,6 +41,20 @@ func TestAPassThroughCaptureHasNothingToReport(t *testing.T) {
 	}
 }
 
+func TestAPointerCrossingAPassThroughHostIsNoGesture(t *testing.T) {
+	// A pass-through host's window opens under whoever is at the desk, and
+	// their pointer crossing it, or their wheel, reports motion that makes no
+	// card. It is not a gesture.
+	hover := []string{"\x1b[<35;51;26M", "\x1b[<35;5;5M", "\x1b[<65;80;19M", "\x1b[<32;20;3M"}
+	if f := check("ghostty", capture(t, reply, hover...), false); len(f) != 0 {
+		t.Fatalf("failures = %v", f)
+	}
+	// A driven host whose capture carries only motion was not driven.
+	if f := check("kitty", capture(t, reply, hover...), false); len(f) == 0 {
+		t.Fatal("a driven host with no press passed")
+	}
+}
+
 func TestAGestureMustMakeACard(t *testing.T) {
 	// The chooser opens and is dismissed, so nothing is written.
 	f := check("fake-host", capture(t, reply, "\x1bn", "\x1b"), false)

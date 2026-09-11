@@ -3,12 +3,17 @@
 # Diple gesture into it where R-014 calls the host driven, and checks the
 # capture. Run it from the repository root:
 #
-#   scripts/verify-hosts.sh [--plain] [--manual] [host...]
+#   scripts/verify-hosts.sh [--plain] [--manual] [--evidence <dir>] [--baseline] [host...]
 #
 # With no host arguments it does every host it can start on this machine and
 # says which ones it skipped, so the release checklist can record both. A host
 # that is absent is reported apart from one that is present and could not be
 # driven: they are different facts, and only the first is a reason to skip.
+#
+# --evidence <dir> is tier 5: the session is built from a clean checkout of
+# HEAD, and each passing capture is filed in <dir> with a report binding it to
+# that commit, for `scripts/evidence.sh upload`. --baseline files each passing
+# capture under testdata/hosts/<host>/<version>/ for tier 3 to replay.
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,7 +23,13 @@ mkdir -p "$out"
 # about 108 bytes cannot be bound, and a checkout deep enough to cross that
 # silently cost the host its gesture.
 ctl="$(mktemp -d "${TMPDIR:-/tmp}/diple-ctl.XXXXXX")"
-trap 'rm -rf "$ctl"' EXIT
+finish() {
+	if [ -d "$ctl/head" ]; then
+		git -C "$root" worktree remove --force "$ctl/head" >/dev/null 2>&1
+	fi
+	rm -rf "$ctl"
+}
+trap finish EXIT
 diple="$out/diple"
 # The canned agent is installed under the name of an adapter Diple knows, so a
 # wrapped session has blocks to raise: an agent with no adapter is passed
@@ -29,17 +40,36 @@ agent_dir="$ctl/bin"
 agent="$agent_dir/claude"
 plain=""
 manual=""
+evidence=""
+baseline=""
 while :; do
 	case "${1:-}" in
 	--plain) plain="--plain"; shift ;;
 	--manual) manual="1"; shift ;;
+	--evidence) evidence="${2:?--evidence needs a directory}"; shift 2 ;;
+	--baseline) baseline="1"; shift ;;
 	*) break ;;
 	esac
 done
+mode="${plain:+plain}"
+mode="${mode:-default}"
 
-go build -o "$diple" "$root/cmd/diple" || exit 1
+# src is the tree the session and the check are built from. Evidence is about
+# one commit, so it is built from a clean checkout of HEAD, and nothing
+# uncommitted in this tree can reach a report.
+src="$root"
+if [ -n "$evidence" ]; then
+	head="$(git -C "$root" rev-parse HEAD)" || exit 1
+	src="$ctl/head"
+	git -C "$root" worktree add -q --detach "$src" "$head" || exit 1
+	mkdir -p "$evidence"
+	evidence="$(cd "$evidence" && pwd)"
+	machine="$(uname -s) $(uname -r) $(uname -m)"
+fi
+
+(cd "$src" && go build -o "$diple" ./cmd/diple && go build -o "$ctl/hostcheck" ./internal/hostcheck) || exit 1
 mkdir -p "$agent_dir"
-cp "$root/scripts/fake-agent.sh" "$agent"
+cp "$src/scripts/fake-agent.sh" "$agent"
 chmod +x "$agent"
 
 capture_for() { printf '%s/%s%s.capture.jsonl' "$out" "$1" "${plain:+.plain}"; }
@@ -336,7 +366,26 @@ for host in "${hosts[@]}"; do
 		continue
 	fi
 	wait_for_settled "$file"
-	go run "$root/internal/hostcheck" --host "$host" --host-version "$(host_version "$host")" ${plain:+--plain} "$file" || status=1
+	version="$(host_version "$host")"
+	if ! "$ctl/hostcheck" --host "$host" --host-version "$version" ${plain:+--plain} "$file"; then
+		status=1
+		continue
+	fi
+	if [ -n "$evidence" ]; then
+		"$ctl/hostcheck" report --sha "$head" --host "$host" --host-version "$version" \
+			--mode "$mode" --machine "$machine" --out "$evidence" "$file" || status=1
+	fi
+	if [ -n "$baseline" ]; then
+		# A capture is filed under the version it was recorded at, so a host
+		# that cannot name its version cannot be a baseline.
+		if [ -z "$version" ]; then
+			echo "FAIL $host: no version to file the capture under" >&2
+			status=1
+			continue
+		fi
+		dest="$root/testdata/hosts/$host/$version"
+		mkdir -p "$dest" && cp "$file" "$dest/$mode.capture.jsonl" && echo "baseline $host $version $mode"
+	fi
 done
 cleanup_hosts
 exit "$status"

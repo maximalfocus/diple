@@ -39,6 +39,13 @@ palette; the agent's output is never repainted with different attributes.
 - `internal/attach` — what a free card's attachment refers to: a path
   is only a reference, a command is run once and its output travels with the
   card.
+- `internal/hostcheck` — the host check behind `scripts/verify-hosts.sh`, and
+  the verification tiers' uses of it: replaying the captures committed under
+  `testdata/hosts/<host>/<version>/`, filing and verifying head-bound host
+  evidence, and classifying which changes need that evidence.
+- `internal/acceptance` — tier-2 checks on the tests themselves: every unit
+  case in `docs/acceptance/` is named by a test, and no test under `internal/`
+  sleeps on the wall clock.
 
 ## Pass-through and composited
 
@@ -194,16 +201,20 @@ conversation aligns the turns it shows and leaves the rest without rows.
 
 ## Verification
 
-```
-gofmt -l .
-go vet ./...
-go test ./...
-```
+Five tiers, each defined by what it needs in order to run; `CONTRIBUTING.md`
+has the commands. CI runs the first four — static checks and builds; unit and
+session tests under `-race -shuffle=on -count=1`; replay of the adapters'
+fixtures and of one committed capture per host and drawing mode under
+`testdata/hosts/`; and `tmux` and `herdr` driven live and headless. One check,
+`gate`, fails unless all of them succeeded and a change outside the
+documentation allowlist carries tier 5: head-bound reports from developers'
+live runs in every host, carried through `refs/evidence/` and verified by
+`internal/hostcheck`. Tests under `internal/` never sleep on the wall clock,
+and `internal/acceptance` enforces that and the case lists under
+`docs/acceptance/`.
 
-CI runs the same on Linux and macOS and cross-compiles darwin/linux × amd64/arm64.
-
-`scripts/verify-hosts.sh [--plain] [--manual] [host…]` is the release-boundary
-check: it records a wrapped session in each host the portability list names,
+`scripts/verify-hosts.sh [--plain] [--manual] [--evidence <dir>] [--baseline] [host…]`
+records a wrapped session in each host the portability list names,
 hands the gesture to the hosts R-014 calls driven, and runs
 `internal/hostcheck` over the capture — the envelope asked for and given back,
 the agent's bytes forwarded unchanged with an empty tray, no 24-bit colour from
