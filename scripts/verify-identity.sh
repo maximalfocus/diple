@@ -21,8 +21,12 @@
 #   codex:    -- --ask-for-approval untrusted
 #   opencode: --env 'OPENCODE_CONFIG_CONTENT={"permission":{"bash":"ask"}}'
 #
-# The check is parity: the wrapped pane must be named as the agent and report
-# the same state as the bare pane in every phase. A state the host cannot
+# The check: in every phase the wrapped pane is named as the agent was typed
+# (a CLI behind a version-numbered file, or run by a runtime such as node, is
+# named for the agent, not the file or the runtime), or, for an identity-only
+# agent, exactly as the bare pane; and it reports the same state as the bare
+# pane. The bare pane's name is recorded for comparison, not judged: without
+# Diple, macOS tmux names claude by its version file and pi as node. A state the host cannot
 # report for the bare CLI either (herdr falls back to idle for an agent it has
 # no rule for) is listed as not reached, on both sides.
 # Empty arrays are expanded as ${a[@]+"${a[@]}"} throughout: macOS still
@@ -222,14 +226,12 @@ status=0
 state_of() { sed -n "s/^$1 $2 .*state=\([^ ]*\).*/\1/p" "$3" | head -1; }
 name_of() { sed -n "s/^$1 $2 .*name=\([^ ]*\).*/\1/p" "$3" | head -1; }
 for phase in $(awk '{print $2}' "$report.bare" "$report.wrapped" | sort -u); do
-	for mode in bare wrapped; do
-		f="$report.$mode"
-		n="$(name_of "$mode" "$phase" "$f")"
-		if [ -n "$(sed -n "/^$mode $phase /p" "$f")" ] && [ "$n" != "$agent" ]; then
-			echo "FAIL $mode $phase: the host named the pane '$n', not '$agent'"
-			status=1
-		fi
-	done
+	b="$(name_of bare "$phase" "$report.bare")"
+	w="$(name_of wrapped "$phase" "$report.wrapped")"
+	if [ -n "$(sed -n "/^wrapped $phase /p" "$report.wrapped")" ] && [ "$w" != "$agent" ] && [ "$w" != "$b" ]; then
+		echo "FAIL wrapped $phase: the host named the pane '$w', neither '$agent' nor the bare CLI's '$b'"
+		status=1
+	fi
 	[ "$phase" = cards ] && continue
 	b="$(state_of bare "$phase" "$report.bare")"
 	w="$(state_of wrapped "$phase" "$report.wrapped")"
