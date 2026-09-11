@@ -98,12 +98,30 @@ its doc comment. `docs/acceptance/README.md` has the format; the tier-2 test in
 `internal/acceptance` rejects a unit case no test names and a named case no
 list has. Host cases are proved by host evidence.
 
+### macOS acceptance
+
+A change outside the documentation allowlist also passes acceptance on a
+macOS machine before it lands, whatever Linux shows. From a clean checkout of
+the final pull-request head, run the tier-1 and tier-2 commands,
+`scripts/verify-hosts.sh` for the hosts that machine has, and the issue's
+acceptance cases, then record in the pull request's body the machine, its
+macOS version, the commands and their results, ending with the line:
+
+```
+macOS-Acceptance: <head sha> PASS
+```
+
+CI's macOS runners do not substitute for this run. A failed or missing run,
+or a machine that cannot be reached, blocks the landing, and a new head needs
+a new run.
+
 ### Landing
 
 Until the repository can require a check, the maintainer lands a pull request
 only when `scripts/gate-status.sh <pr>` reports `gate` green on its current
-head; a red, pending or missing gate refuses. A red `main` lets only its own
-fix land.
+head and, for a change outside the documentation allowlist, a passing macOS
+acceptance run of that head; anything else refuses. A red `main` lets only its
+own fix land.
 
 ## Layout
 

@@ -105,7 +105,9 @@ refuses both rulesets and branch protection for a private repository
 (`Upgrade to GitHub Pro or make this repository public`, checked on
 2026-09-11), so server enforcement cannot be enabled before publication. Until
 then the landing procedure enforces it: `scripts/gate-status.sh <pr>` must
-report `gate` green on the pull request's current head.
+report `gate` green on the pull request's current head and, for a change
+outside the documentation allowlist, a passing macOS acceptance run of that
+head recorded in its body.
 
 ## Left for the release itself
 
