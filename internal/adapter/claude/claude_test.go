@@ -14,14 +14,21 @@ import (
 	"github.com/maximalfocus/diple/internal/screen"
 )
 
-const fixtureVersion = "2.1.266"
+// fixtureVersion is the newest verified version, the one the tests that need
+// a single fixture replay.
+const fixtureVersion = "2.1.268"
 
-// loadFixture replays a recorded session into a screen model and returns
-// the rows the mode provides as history: scrollback plus screen inline, the
-// visible screen in fullscreen.
+// loadFixture replays the newest recorded session into a screen model and
+// returns the rows the mode provides as history: scrollback plus screen
+// inline, the visible screen in fullscreen.
 func loadFixture(t *testing.T, mode string) (*screen.Screen, []string, *adapter.Transcript) {
 	t.Helper()
-	dir := filepath.Join("testdata", fixtureVersion)
+	return loadFixtureAt(t, fixtureVersion, mode)
+}
+
+func loadFixtureAt(t *testing.T, version, mode string) (*screen.Screen, []string, *adapter.Transcript) {
+	t.Helper()
+	dir := filepath.Join("testdata", version)
 	rec, err := record.Open(filepath.Join(dir, mode+".recording.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -90,40 +97,43 @@ func TestFixturesAlignInBothModes(t *testing.T) {
 		{"fullscreen", adapter.ModeFullscreen, 3},
 	}
 	a := &Adapter{}
-	for _, c := range cases {
-		t.Run(c.mode, func(t *testing.T) {
-			s, rows, tr := loadFixture(t, c.mode)
-			if tr.Version != fixtureVersion || len(tr.Turns) != 1 {
-				t.Fatalf("transcript version %q turns %d", tr.Version, len(tr.Turns))
-			}
-			if got := a.Mode(s); got != c.want {
-				t.Fatalf("mode = %s, want %s", got, c.want)
-			}
-			al := a.Align(tr, rows)
-			if len(al) != 1 || !al[0].Aligned {
-				t.Fatalf("alignment = %+v", al)
-			}
-			want := expected(c.offset)
-			if len(al[0].Blocks) != len(want) {
-				for _, b := range al[0].Blocks {
-					t.Logf("%s %q %d-%d", b.Kind, b.Text, b.First, b.Last)
+	// Every verified version keeps its fixtures, and every one must align.
+	for _, version := range Verified {
+		for _, c := range cases {
+			t.Run(version+"/"+c.mode, func(t *testing.T) {
+				s, rows, tr := loadFixtureAt(t, version, c.mode)
+				if tr.Version != version || len(tr.Turns) != 1 {
+					t.Fatalf("transcript version %q turns %d", tr.Version, len(tr.Turns))
 				}
-				t.Fatalf("%d blocks, want %d", len(al[0].Blocks), len(want))
-			}
-			for i, w := range want {
-				got := al[0].Blocks[i]
-				if got.Kind != w.kind || (w.text != "" && got.Text != w.text) {
-					t.Fatalf("block %d = %s %q, want %s %q", i, got.Kind, got.Text, w.kind, w.text)
+				if got := a.Mode(s); got != c.want {
+					t.Fatalf("mode = %s, want %s", got, c.want)
 				}
-				if got.First != w.first+c.offset || got.Last != w.last+c.offset {
-					t.Fatalf("block %d (%s %q) rows %d-%d, want %d-%d", i, got.Kind, got.Text, got.First, got.Last, w.first+c.offset, w.last+c.offset)
+				al := a.Align(tr, rows)
+				if len(al) != 1 || !al[0].Aligned {
+					t.Fatalf("alignment = %+v", al)
 				}
-				// The rows really carry the block's text.
-				if got.Kind != blocks.CodeBlock && !strings.Contains(joinRows(rows, got.First, got.Last), firstWord(got.Text)) {
-					t.Fatalf("block %d rows %q do not contain %q", i, joinRows(rows, got.First, got.Last), firstWord(got.Text))
+				want := expected(c.offset)
+				if len(al[0].Blocks) != len(want) {
+					for _, b := range al[0].Blocks {
+						t.Logf("%s %q %d-%d", b.Kind, b.Text, b.First, b.Last)
+					}
+					t.Fatalf("%d blocks, want %d", len(al[0].Blocks), len(want))
 				}
-			}
-		})
+				for i, w := range want {
+					got := al[0].Blocks[i]
+					if got.Kind != w.kind || (w.text != "" && got.Text != w.text) {
+						t.Fatalf("block %d = %s %q, want %s %q", i, got.Kind, got.Text, w.kind, w.text)
+					}
+					if got.First != w.first+c.offset || got.Last != w.last+c.offset {
+						t.Fatalf("block %d (%s %q) rows %d-%d, want %d-%d", i, got.Kind, got.Text, got.First, got.Last, w.first+c.offset, w.last+c.offset)
+					}
+					// The rows really carry the block's text.
+					if got.Kind != blocks.CodeBlock && !strings.Contains(joinRows(rows, got.First, got.Last), firstWord(got.Text)) {
+						t.Fatalf("block %d rows %q do not contain %q", i, joinRows(rows, got.First, got.Last), firstWord(got.Text))
+					}
+				}
+			})
+		}
 	}
 }
 

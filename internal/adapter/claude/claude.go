@@ -20,7 +20,7 @@ import (
 )
 
 // Verified lists the Claude Code versions the fixtures under testdata pin.
-var Verified = []string{"2.1.266"}
+var Verified = []string{"2.1.266", "2.1.268"}
 
 // Decoration facts of Claude Code's renderer.
 const (

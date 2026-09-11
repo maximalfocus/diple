@@ -98,7 +98,7 @@ diple --copy-on-select=off claude # copy only on an explicit copy
 
 | Agent | Verified against | Notes |
 |---|---|---|
-| Claude Code | 2.1.266 | Inline and fullscreen rendering |
+| Claude Code | 2.1.266, 2.1.268 | Inline and fullscreen rendering |
 | Codex CLI | 0.153.4 | Writes its transcript after the fact, so a live session anchors notes at paragraph granularity |
 | pi | session format 3 | Echoes your prompt above its reply; Diple never mistakes one for the other |
 

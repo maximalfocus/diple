@@ -23,6 +23,10 @@ type staticSource struct{ tr *adapter.Transcript }
 
 func (s staticSource) Transcript() (*adapter.Transcript, error) { return s.tr, nil }
 
+// fixtureDir stays on 2.1.266: the journeys' pointer rows were read off that
+// fixture's geometry. At 2.1.268 the input box sits one row higher, so the
+// first card pushes the heading into scrollback and resting on the card
+// scrolls to it, which moves the tray to the bottom (see issue #27).
 const fixtureDir = "../adapter/claude/testdata/2.1.266"
 
 // advance moves the session's own clock forward, which is how a test drives

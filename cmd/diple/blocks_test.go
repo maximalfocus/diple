@@ -10,14 +10,14 @@ import (
 )
 
 func TestBlocksPrintsFixtureTranscript(t *testing.T) {
-	transcript := filepath.Join("..", "..", "internal", "adapter", "claude", "testdata", "2.1.266", "inline.transcript.jsonl")
+	transcript := filepath.Join("..", "..", "internal", "adapter", "claude", "testdata", "2.1.268", "inline.transcript.jsonl")
 	out, err := exec.Command(dipleBin, "blocks", transcript).CombinedOutput()
 	if err != nil {
 		t.Fatalf("blocks failed: %v\n%s", err, out)
 	}
 	text := string(out)
 	for _, want := range []string{
-		"agent claude version 2.1.266",
+		"agent claude version 2.1.268",
 		"turns 1",
 		"turn 1",
 		"heading    Plan",
