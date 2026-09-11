@@ -4,7 +4,7 @@
 # reports the same idle, working and blocked states for both. Run it from the
 # repository root on a machine where the agent is installed and logged in:
 #
-#   scripts/verify-identity.sh [--cards] [--env KEY=VALUE]... <herdr|tmux> <agent> [-- <agent args>]
+#   scripts/verify-identity.sh [--cards] [--env KEY=VALUE]... [--block <prompt>] <herdr|tmux> <agent> [-- <agent args>]
 #
 # It builds Diple from this checkout and shims the agent in a directory of its
 # own, so the user's own shims, startup files and Diple are never touched: the
@@ -14,20 +14,30 @@
 # host is shown to name the agent with Diple drawing in its pane.
 #
 # The prompts cost a few tokens of the agent's model. The blocked state is
-# reached by asking for a network command and the question is declined. An
-# agent that runs commands without asking by default is asked to ask for this
-# run only, through --env: for opencode,
-#   --env 'OPENCODE_CONFIG_CONTENT={"permission":{"bash":"ask"}}'
-# which leaves the user's own configuration untouched.
+# reached by asking for a harmless command with a side effect, which an agent
+# asks approval for, and the question is declined; --block replaces the prompt.
+# An agent that runs commands without asking is asked to ask for this run only,
+# through its own arguments or --env, leaving the user's configuration alone:
+#   codex:    -- --ask-for-approval untrusted
+#   opencode: --env 'OPENCODE_CONFIG_CONTENT={"permission":{"bash":"ask"}}'
+#
+# The check is parity: the wrapped pane must be named as the agent and report
+# the same state as the bare pane in every phase. A state the host cannot
+# report for the bare CLI either (herdr falls back to idle for an agent it has
+# no rule for) is listed as not reached, on both sides.
+# Empty arrays are expanded as ${a[@]+"${a[@]}"} throughout: macOS still
+# ships bash 3.2, where "${a[@]}" of an empty array is unbound under set -u.
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cards=""
 extra_env=()
+blocking_prompt='Use your shell tool to run exactly this command and nothing else: touch /tmp/diple-identity-probe' 
 while :; do
 	case "${1:-}" in
 	--cards) cards=1; shift ;;
 	--env) extra_env+=("${2:?--env needs KEY=VALUE}"); shift 2 ;;
+	--block) blocking_prompt="${2:?--block needs a prompt}"; shift 2 ;;
 	*) break ;;
 	esac
 done
@@ -40,7 +50,7 @@ agent_args=("$@")
 ctl="$(mktemp -d "${TMPDIR:-/tmp}/diple-id.XXXXXX")"
 panes=()
 finish() {
-	for p in "${panes[@]}"; do
+	for p in ${panes[@]+"${panes[@]}"}; do
 		case "$host" in
 		tmux) tmux kill-session -t "$p" 2>/dev/null ;;
 		herdr) herdr pane close "$p" >/dev/null 2>&1 ;;
@@ -71,10 +81,9 @@ HOME="$ctl/home" XDG_DATA_HOME="$ctl/data" PATH="$bare_path" "$ctl/diple" on "$a
 wrap_path="$ctl/data/diple/bin:$bare_path"
 
 quoted_args=""
-for a in "${agent_args[@]}"; do quoted_args+=" $(printf '%q' "$a")"; done
+for a in ${agent_args[@]+"${agent_args[@]}"}; do quoted_args+=" $(printf '%q' "$a")"; done
 quoted_env=""
-for e in "${extra_env[@]}"; do quoted_env+=" $(printf '%q' "$e")"; done
-blocking_prompt='Run this exact shell command and show me its first line of output: curl -sI https://example.com'
+for e in ${extra_env[@]+"${extra_env[@]}"}; do quoted_env+=" $(printf '%q' "$e")"; done
 
 # --- host primitives ------------------------------------------------------
 
@@ -204,13 +213,30 @@ cat "$report.bare"
 run wrapped "$wrap_path" >"$report.wrapped"
 cat "$report.wrapped"
 
-# The wrapped pane must be named as the agent in every state the bare pane
-# reached, and reach the same states.
+# Parity: in every phase the wrapped pane is named as the agent and reports
+# the state the bare pane reported. The states either side reached are listed.
 status=0
-while read -r mode phase rest; do
-	name="$(printf '%s\n' "$rest" | sed -n 's/.*name=\([^ ]*\).*/\1/p')"
-	[ "$name" = "$agent" ] || { echo "FAIL $mode $phase: the host named the pane '${name}', not '$agent'"; status=1; }
-	case "$rest" in *"(never"*) echo "FAIL $mode $phase: $rest"; status=1 ;; esac
-done < <(cat "$report.bare" "$report.wrapped")
-[ "$status" = 0 ] && echo "PASS $host $agent: the host names the wrapped pane as the bare one${cards:+, three cards in its tray}"
+state_of() { sed -n "s/^$1 $2 .*state=\([^ ]*\).*/\1/p" "$3" | head -1; }
+name_of() { sed -n "s/^$1 $2 .*name=\([^ ]*\).*/\1/p" "$3" | head -1; }
+for phase in $(awk '{print $2}' "$report.bare" "$report.wrapped" | sort -u); do
+	for mode in bare wrapped; do
+		f="$report.$mode"
+		n="$(name_of "$mode" "$phase" "$f")"
+		if [ -n "$(sed -n "/^$mode $phase /p" "$f")" ] && [ "$n" != "$agent" ]; then
+			echo "FAIL $mode $phase: the host named the pane '$n', not '$agent'"
+			status=1
+		fi
+	done
+	[ "$phase" = cards ] && continue
+	b="$(state_of bare "$phase" "$report.bare")"
+	w="$(state_of wrapped "$phase" "$report.wrapped")"
+	if [ "$b" != "$w" ]; then
+		echo "FAIL $phase: the bare pane reported '$b', the wrapped one '$w'"
+		status=1
+	fi
+done
+reached="$(grep -v '(never' "$report.wrapped" | awk '{print $2}' | grep -v -e ready -e cards | tr '\n' ' ')"
+missed="$(grep '(never' "$report.bare" | awk '{print $2}' | tr '\n' ' ')"
+echo "states reached through Diple: ${reached:-none}${missed:+; not reached by the bare CLI either: $missed}"
+[ "$status" = 0 ] && echo "PASS $host $agent: the host names and reports the wrapped pane as the bare one${cards:+, three cards in its tray}"
 exit "$status"
