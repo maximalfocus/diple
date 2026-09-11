@@ -75,6 +75,13 @@ func Run(opts Options) (exitCode int, err error) {
 		rec, recCloser = w, w
 	}
 
+	// Signals are caught before the agent starts and the terminal goes raw, so
+	// a termination that arrives while Diple is still setting up is queued and
+	// forwarded like any other, never taking Diple down with the terminal raw.
+	sigs := make(chan os.Signal, 8)
+	signal.Notify(sigs, syscall.SIGWINCH, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	defer signal.Stop(sigs)
+
 	cmd := exec.Command(opts.Path, opts.Args...)
 	cmd.Args[0] = opts.Name
 	cmd.Env = os.Environ()
@@ -199,10 +206,8 @@ func Run(opts Options) (exitCode int, err error) {
 		}
 	}()
 
-	// Signals: resize follows the host terminal; termination is forwarded.
-	sigs := make(chan os.Signal, 8)
-	signal.Notify(sigs, syscall.SIGWINCH, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
-	defer signal.Stop(sigs)
+	// Signals: resize follows the host terminal; termination is forwarded,
+	// including any that arrived while the session was being set up.
 	go func() {
 		for sig := range sigs {
 			switch sig {

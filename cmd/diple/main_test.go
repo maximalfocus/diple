@@ -31,7 +31,7 @@ const fakeAgent = `#!/bin/sh
 case "$1" in
   -p|--print) printf 'print:%s\n' "$2"; exit 5 ;;
   --version) printf 'fake 1.0\n'; exit 0 ;;
-  hang) trap 'exit 9' TERM; sleep 30 & wait; exit 0 ;;
+  hang) trap 'exit 9' TERM; echo trapped; sleep 30 & wait; exit 0 ;;
 esac
 printf 'hello \033[1mworld\033[0m\n'
 read line
@@ -237,7 +237,8 @@ func TestSignalIsForwardedAndTerminalRestored(t *testing.T) {
 	cmd, ptmx, tty, before, cap := ptyRun(t, "fake", "hang")
 	defer ptmx.Close()
 	cap.waitFor(t, wrap.EnvelopeStart)
-	time.Sleep(200 * time.Millisecond) // let the shell install its trap
+	// The agent says when its trap is in place, so the signal cannot race it.
+	cap.waitFor(t, "trapped")
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
