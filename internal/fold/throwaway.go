@@ -1,0 +1,3 @@
+package fold
+
+func  throwaway( ) {}
