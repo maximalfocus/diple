@@ -83,10 +83,12 @@ func (s *Session) windowStart() int {
 }
 
 // inputRow is the agent-region row where the native input box begins, or
-// the region's end when it is not visible or the view is scrolled.
+// the region's end when it is not visible or the view is scrolled. A view
+// scrolled only to reveal a card's anchor keeps the tray above the live input
+// box, so the card the pointer rests on stays under it.
 func (s *Session) inputRow() int {
 	agentRows := s.rows - s.trayH
-	if s.back != 0 || s.adapter == nil {
+	if (s.back != 0 && !s.revealed) || s.adapter == nil {
 		return agentRows
 	}
 	if r := s.adapter.InputRow(s.Model.Text()); r >= 0 && r <= agentRows {

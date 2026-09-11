@@ -97,12 +97,14 @@ func (s *Session) showAnchorLocked(c *card.Card) {
 	}
 	s.highlight = &rowRange{first: first, last: last}
 	s.ensureVisibleLocked(first, last)
+	s.revealed = s.back != 0
 }
 
 // ensureVisibleLocked scrolls Diple's scrollback the least it can so rows
 // first..last are inside the agent region. The alternate screen belongs to
 // the agent, so nothing is scrolled there.
 func (s *Session) ensureVisibleLocked(first, last int) {
+	s.revealed = false
 	if s.Model.AltActive() {
 		return
 	}
