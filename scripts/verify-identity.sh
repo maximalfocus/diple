@@ -123,8 +123,12 @@ start() {
 			herdr pane run "$pane" "$cmd" >/dev/null 2>&1 || return 1
 			echo "$pane"
 		else
-			herdr agent start "$label" --cwd "$work" --no-focus -- sh -c "$cmd" >/dev/null 2>&1 || return 1
-			echo "$label"
+			# herdr 0.7 names the agent after the label only until the pane's
+			# occupant changes, so the pane is followed by its id.
+			pane="$(herdr agent start "$label" --cwd "$work" --no-focus -- sh -c "$cmd" 2>/dev/null |
+				sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p')"
+			[ -n "$pane" ] || return 1
+			echo "$pane"
 		fi
 		;;
 	esac
@@ -136,11 +140,7 @@ identity() {
 	tmux) printf 'name=%s state=-\n' "$(tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null)" ;;
 	herdr)
 		local line
-		if [ -n "$herdr_v08" ]; then
-			line="$(herdr agent list 2>/dev/null | "$ctl/hostcheck" herdr-pane --pane "$1")"
-		else
-			line="$(herdr agent list 2>/dev/null | "$ctl/hostcheck" herdr-pane --name "$1")"
-		fi
+		line="$(herdr agent list 2>/dev/null | "$ctl/hostcheck" herdr-pane --pane "$1")"
 		echo "${line:-name= state=none}"
 		;;
 	esac
@@ -155,6 +155,18 @@ type_text() {
 }
 enter() { type_text "$1" $'\r'; }
 escape() { type_text "$1" $'\033'; }
+
+# prompt submits a prompt to the agent. herdr 0.8 pastes it the way the agent
+# expects and sends Enter; typed text followed by a carriage return can land
+# in an agent's composer as a newline instead of submitting it.
+prompt() {
+	if [ "$host" = herdr ] && [ -n "$herdr_v08" ]; then
+		herdr agent prompt "$1" "$2" >/dev/null 2>&1
+	else
+		type_text "$1" "$2"
+		enter "$1"
+	fi
+}
 
 # await polls until the pane reaches state, up to seconds. herdr reports an
 # agent that finished while its tab was not in view as `done`, the same idle
@@ -207,12 +219,10 @@ run() {
 		sleep 1
 		echo "$mode cards $(identity "$pane")"
 	fi
-	type_text "$pane" "Count from 1 to 40, one number per line."
-	enter "$pane"
+	prompt "$pane" "Count from 1 to 40, one number per line."
 	if await "$pane" working 30; then echo "$mode working $(identity "$pane")"; else echo "$mode working $(identity "$pane") (never working)"; fi
 	await "$pane" idle 120 >/dev/null
-	type_text "$pane" "$blocking_prompt"
-	enter "$pane"
+	prompt "$pane" "$blocking_prompt"
 	if await "$pane" blocked 120; then echo "$mode blocked $(identity "$pane")"; else echo "$mode blocked $(identity "$pane") (never blocked)"; fi
 	escape "$pane"
 	await "$pane" idle 60 >/dev/null
