@@ -191,6 +191,9 @@ run() {
 			enter "$pane"
 			sleep 0.5
 		done
+		# Saving a card leaves focus on the tray, where Enter would send it;
+		# Tab gives focus back to the agent's own box before the prompts.
+		type_text "$pane" $'\t'
 		sleep 1
 		echo "$mode cards $(identity "$pane")"
 	fi
