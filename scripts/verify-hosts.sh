@@ -78,9 +78,12 @@ capture_for() { printf '%s/%s%s.capture.jsonl' "$out" "$1" "${plain:+.plain}"; }
 # checkout that has been worked in with the real agent has transcripts there:
 # aligning the canned agent's rows against one of those would leave every block
 # without rows, and nothing to raise, for a reason that has nothing to do with
-# the host.
+# the host. Diple is exec'd, as a shell execs the agent a user types, so the
+# pane's process is the agent's persona and not a shell left waiting on it:
+# macOS tmux names a pane after its process group's leader, and a bash that
+# runs this line without exec'ing is that leader.
 wrapped() {
-	printf 'cd %s && PATH=%s:$PATH DIPLE_FAKE_AGENT_SECONDS=%s %s --record %s %s claude' \
+	printf 'cd %s && export PATH=%s:$PATH DIPLE_FAKE_AGENT_SECONDS=%s && exec %s --record %s %s claude' \
 		"$ctl" "$agent_dir" "${DIPLE_FAKE_AGENT_SECONDS:-25}" "$diple" "$(capture_for "$1")" "$plain"
 }
 
