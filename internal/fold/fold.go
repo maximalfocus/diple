@@ -191,3 +191,5 @@ func (a *Archive) Append(text string) error {
 	_, err = f.WriteString(sep + time.Now().UTC().Format(time.RFC3339) + "\n\n" + text + "\n")
 	return err
 }
+
+// throwaway: a harmless code change.
