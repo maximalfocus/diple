@@ -59,8 +59,11 @@ func TestShimRunsTheRealAgentAndBypassesOnRequest(t *testing.T) {
 		return string(out), code
 	}
 
-	// `diple on` installs a shim for every adapter and adds the PATH block.
-	if out, code := run(nil, diple, "on"); code != 0 || !strings.Contains(out, "claude") {
+	// `diple on` installs a shim for each agent found that Diple wraps, and
+	// adds the PATH block. It looks only at the PATH it is given, which here
+	// holds nothing but the test's own agents.
+	only := []string{"PATH=" + realDir}
+	if out, code := run(only, diple, "on"); code != 0 || !strings.Contains(out, "claude") {
 		t.Fatalf("on: code=%d out=%s", code, out)
 	}
 	shimDir := filepath.Join(home, "share", "diple", "bin")
@@ -105,19 +108,40 @@ func TestShimRunsTheRealAgentAndBypassesOnRequest(t *testing.T) {
 		t.Fatalf("DIPLE=0: %q/%d, direct: %q/%d", bypass, bypassCode, direct, directCode)
 	}
 
-	// status reports what is in place.
+	// `diple on <agent>` adds an agent Diple has no adapter for as
+	// identity-only, and refuses one that is not on PATH.
+	opencode := filepath.Join(realDir, "opencode")
+	if err := os.WriteFile(opencode, []byte("#!/bin/sh\necho \"real opencode $*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := run(only, diple, "on", "opencode"); code != 0 || !strings.Contains(out, "opencode") {
+		t.Fatalf("on opencode: code=%d out=%s", code, out)
+	}
+	if out, code := run(only, diple, "on", "no-such-agent-xyz"); code != 127 {
+		t.Fatalf("on a missing agent: code=%d out=%s", code, out)
+	}
+	byNameOC, _ := run(onPath, "sh", "-c", "opencode --flag")
+	if strings.TrimSpace(byNameOC) != "real opencode --flag" {
+		t.Fatalf("identity-only through its shim: %q", byNameOC)
+	}
+
+	// status reports what is found, what is wrapped and what is identity-only.
 	st, _ := run([]string{"PATH=" + shimDir + string(os.PathListSeparator) + realDir}, diple, "status")
-	if !strings.Contains(st, "shims installed: claude") || !strings.Contains(st, "on PATH: yes") ||
-		!strings.Contains(st, "ahead of the real binary: claude") {
-		t.Fatalf("status:\n%s", st)
+	for _, want := range []string{"agents found: claude, opencode", "wrapped: claude", "identity-only: opencode",
+		"on PATH: yes", "ahead of the real binary: claude, opencode"} {
+		if !strings.Contains(st, want) {
+			t.Fatalf("status lacks %q:\n%s", want, st)
+		}
 	}
 
 	// `diple off` takes the shim and the block back out.
 	if _, code := run(nil, diple, "off"); code != 0 {
 		t.Fatalf("off: code=%d", code)
 	}
-	if _, err := os.Stat(shim); !os.IsNotExist(err) {
-		t.Fatalf("shim survived off: %v", err)
+	for _, p := range []string{shim, filepath.Join(shimDir, "opencode")} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("shim %s survived off: %v", p, err)
+		}
 	}
 	after, err := os.ReadFile(rc)
 	if err != nil || strings.Contains(string(after), shimDir) {

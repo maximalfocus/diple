@@ -25,6 +25,7 @@ import (
 var (
 	dipleBin string
 	fakeDir  string
+	cacheDir string
 )
 
 const fakeAgent = `#!/bin/sh
@@ -32,6 +33,11 @@ case "$1" in
   -p|--print) printf 'print:%s\n' "$2"; exit 5 ;;
   --version) printf 'fake 1.0\n'; exit 0 ;;
   hang) trap 'exit 9' TERM; echo trapped; sleep 30 & wait; exit 0 ;;
+  identity)
+    c=$(ps -o comm= -p $PPID); a=$(ps -o args= -p $PPID)
+    printf 'parent=%s argv0=%s\n' "${c##*/}" "${a%% *}"
+    env | grep '^DIPLE' | sed 's/^/leak=/'
+    echo done; exit 0 ;;
 esac
 printf 'hello \033[1mworld\033[0m\n'
 read line
@@ -50,6 +56,7 @@ func TestMain(m *testing.M) {
 	if err := build.Run(); err != nil {
 		panic(err)
 	}
+	cacheDir = filepath.Join(dir, "cache")
 	fakeDir = filepath.Join(dir, "bin")
 	if err := os.Mkdir(fakeDir, 0o755); err != nil {
 		panic(err)
@@ -63,7 +70,8 @@ func TestMain(m *testing.M) {
 }
 
 func env() []string {
-	return append(os.Environ(), "PATH="+fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// Personas go to a cache of the test's own, never the developer's.
+	return append(os.Environ(), "PATH="+fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"), "XDG_CACHE_HOME="+cacheDir)
 }
 
 func exitCode(err error) int {
@@ -304,4 +312,67 @@ func TestRecordWritesReplayableFixture(t *testing.T) {
 	if got := s.Text()[0]; got != "hello world" {
 		t.Fatalf("replayed row 0 = %q", got)
 	}
+}
+
+// TestTheHostSeesTheAgentNotDiple: the process in the pane is the agent's
+// persona, named and executed as the agent, and none of Diple's own variables
+// reaches the agent.
+func TestTheHostSeesTheAgentNotDiple(t *testing.T) {
+	t.Setenv("DIPLE_SHIM_DIR", t.TempDir())
+	t.Setenv("DIPLE", "1")
+	cmd, ptmx, tty, _, cap := ptyRun(t, "fake", "identity")
+	defer ptmx.Close()
+	cap.waitFor(t, "done")
+	_ = cmd.Wait()
+	out := cap.String()
+	if !strings.Contains(out, "parent=fake argv0=fake") {
+		t.Fatalf("the host would not see the agent: %q", out)
+	}
+	if strings.Contains(out, "leak=") {
+		t.Fatalf("a Diple variable reached the agent: %q", out)
+	}
+	_ = tty.Close()
+}
+
+// TestAVersionNumberedCLIIsNamedAsTyped: a CLI reached through a link to a
+// version-numbered file is named as the user typed it, not as the file.
+func TestAVersionNumberedCLIIsNamedAsTyped(t *testing.T) {
+	dir := t.TempDir()
+	versions := filepath.Join(dir, "versions")
+	if err := os.MkdirAll(versions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(versions, "9.9.9"), []byte(fakeAgent), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(versions, "9.9.9"), filepath.Join(dir, "vfake")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd, ptmx, tty, _, cap := ptyRun(t, "vfake", "identity")
+	defer ptmx.Close()
+	cap.waitFor(t, "done")
+	_ = cmd.Wait()
+	if out := cap.String(); !strings.Contains(out, "parent=vfake argv0=vfake") {
+		t.Fatalf("not named as typed: %q", out)
+	}
+	_ = tty.Close()
+}
+
+// TestAnIdentityOnlyAgentRunsAsItself: an identity-only agent is the process
+// in the pane, and Diple owns nothing there: no mouse envelope, every byte
+// the agent's own.
+func TestAnIdentityOnlyAgentRunsAsItself(t *testing.T) {
+	cmd, ptmx, tty, _, cap := ptyRun(t, "--identity", "fake")
+	defer ptmx.Close()
+	cap.waitFor(t, "hello")
+	_, _ = ptmx.Write([]byte("xyz\r"))
+	cap.waitFor(t, "got:xyz")
+	if err := cmd.Wait(); exitCode(err) != 3 {
+		t.Fatalf("exit = %d, want the agent's own 3", exitCode(err))
+	}
+	if strings.Contains(cap.String(), wrap.EnvelopeStart) {
+		t.Fatalf("identity-only asked for the mouse: %q", cap.String())
+	}
+	_ = tty.Close()
 }

@@ -17,10 +17,11 @@ import (
 // subcommands are the verification tiers' uses of the host check, beside the
 // single-capture form scripts/verify-hosts.sh runs.
 var subcommands = map[string]func(args []string) int{
-	"replay":   replayMain,
-	"report":   reportMain,
-	"evidence": evidenceMain,
-	"classify": classifyMain,
+	"replay":     replayMain,
+	"report":     reportMain,
+	"evidence":   evidenceMain,
+	"classify":   classifyMain,
+	"herdr-pane": herdrPaneMain,
 }
 
 // portability is R-014's host list, by the names scripts/verify-hosts.sh uses.

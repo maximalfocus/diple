@@ -9,8 +9,9 @@ palette; the agent's output is never repainted with different attributes.
 
 - `cmd/diple` — the `diple` command. `diple <agent> [args…]` is the wrapped form;
   `diple blocks <transcript>` prints an adapter's turns and blocks.
-- `internal/agent` — locating the real agent executable and the non-interactive
-  invocation forms that bypass the wrapper.
+- `internal/agent` — locating the real agent executable, the non-interactive
+  invocation forms that bypass the wrapper, and the catalogue of agent CLIs
+  aligned with those `herdr` recognises.
 - `internal/screen` — the VT screen model: cells with original attributes,
   scrollback, alternate screen, and re-emission of rows.
 - `internal/record` — session fixture recording and replay.
@@ -29,8 +30,11 @@ palette; the agent's output is never repainted with different attributes.
 - `internal/card` — cards of every kind, anchors, attachments, the tray, and
   its per-session persistence and stash slot under the user's state directory.
 - `internal/shim` — the same-named executables that put Diple ahead of the
-  real CLIs on PATH, the `PATH` block in the user's startup files, and the
-  report behind `diple status`.
+  real CLIs on PATH, wrapped or identity-only, the `PATH` block in the user's
+  startup files, and the report behind `diple status`.
+- `internal/persona` — the copies of Diple's own binary named as the user
+  typed an agent, kept per build in the user cache, that Diple re-executes
+  itself through so the host names the agent.
 - `internal/keys` — the binding table: every gesture Diple owns, its default
   key, and the user's `bindings.conf` read over the defaults.
 - `internal/clip` — the clipboard ladder: OSC 52 where the host answers for
@@ -120,7 +124,9 @@ compiled as a reference, and a command is run once, then, and what it printed
 travels with the card. A block that carries a card keeps a tail mark — Diple's
 own `›` one column past the block's last character, in the card's tag colour,
 with the count for more than one. `diple stash` sets an agent's saved tray
-aside in one slot and `diple unstash` gives it to that agent's next session.
+aside in one slot and `diple unstash` gives it to that agent's next session;
+without an agent named they take the most recent session's, or the one agent
+with a stash, and ask when that is ambiguous.
 
 ## Adapters
 
@@ -142,9 +148,23 @@ later.
 
 ## Shims and default-on
 
-`diple on` writes one shim per registered adapter into `$XDG_DATA_HOME/diple/bin`
-and adds a marked block to the user's startup files that puts that directory
-first on `PATH`; `diple off` removes exactly what it added. A shim uses shell
+`diple on` writes a shim into `$XDG_DATA_HOME/diple/bin` for each catalogued
+agent found on `PATH` that has an adapter, and `diple on <agent>` adds any other
+agent as identity-only, and it adds a marked block to the user's startup files
+that puts that directory first on `PATH`; `diple off` removes every shim it
+wrote and the block. `diple status` names the agents found, wrapped, and
+identity-only.
+
+The host names the agent, never Diple. A host that inspects the process in its
+pane reads `argv[0]`, the kernel's command name, or the executable's path, so
+before wrapping Diple re-executes itself, same process, through the agent's
+persona — a copy of its own binary named exactly as the user typed the agent,
+kept per build in the user cache and never on `PATH` — and all three facts
+become the agent's. A symlink would leave the command name `diple`, and a hard
+link can report another link's path and outlives an upgrade. An identity-only
+agent runs as itself: the process in the pane is the real CLI, with Diple
+owning nothing there. Diple's own variables — `DIPLE`, `DIPLE_SHIM_DIR`, and the
+persona's hand-over — leave the environment before the agent starts. A shim uses shell
 builtins only, because it may run under a `PATH` that holds nothing but its own
 directory and the real agent's, and it exports its own directory as
 `DIPLE_SHIM_DIR` so Diple skips it when it looks for the real CLI. Diple also

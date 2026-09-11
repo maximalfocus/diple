@@ -423,6 +423,46 @@ func (s *Store) Unstash(agent string) (int, error) {
 	return t.Len(), nil
 }
 
+// NewestAgent is the agent, among agents, whose session tray was written
+// last: the current or most recent session's. ok is false when that is
+// ambiguous: no agent has a tray, or two were written at the same instant.
+func (s *Store) NewestAgent(agents []string) (agent string, ok bool) {
+	var at time.Time
+	tie := false
+	for _, a := range agents {
+		p, err := s.newestTray(a)
+		if err != nil || p == "" {
+			continue
+		}
+		info, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		switch t := info.ModTime(); {
+		case agent == "" || t.After(at):
+			agent, at, tie = a, t, false
+		case t.Equal(at):
+			tie = true
+		}
+	}
+	return agent, agent != "" && !tie
+}
+
+// StashedAgent is the one agent, among agents, with a tray in its stash
+// slot. ok is false when none has one, or more than one does.
+func (s *Store) StashedAgent(agents []string) (string, bool) {
+	var found []string
+	for _, a := range agents {
+		if _, err := os.Stat(s.stashPath(a)); err == nil {
+			found = append(found, a)
+		}
+	}
+	if len(found) != 1 {
+		return "", false
+	}
+	return found[0], true
+}
+
 // newestTray is the agent's most recently written session tray, or "" when
 // it has none. The stash and the queue are not session trays.
 func (s *Store) newestTray(agent string) (string, error) {

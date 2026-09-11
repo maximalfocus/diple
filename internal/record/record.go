@@ -25,6 +25,10 @@ const (
 	KindInput      = "in"         // bytes from the user to the agent
 	KindResize     = "resize"     // the terminal changed size
 	KindTranscript = "transcript" // the session transcript was discovered
+	// KindHost is what the host called the wrapped pane, and the state it
+	// reported, as `name=<agent> state=<state>`. The host check appends it
+	// to a live capture; R-017 requires the name to be the agent's.
+	KindHost = "host"
 )
 
 // Header is the first line of a fixture.
@@ -112,6 +116,11 @@ func (w *Writer) Transcript(sessionID string) {
 	w.write(wireEvent{At: w.since(), Kind: KindTranscript, Session: sessionID})
 }
 
+// Host records what the host called the wrapped pane, and its state.
+func (w *Writer) Host(identity string) {
+	w.write(wireEvent{At: w.since(), Kind: KindHost, Data: base64.StdEncoding.EncodeToString([]byte(identity))})
+}
+
 // Close flushes and closes the fixture, returning the first write error.
 func (w *Writer) Close() error {
 	w.mu.Lock()
@@ -165,7 +174,7 @@ func Read(r io.Reader) (*Recording, error) {
 			ev.Data = data
 		}
 		switch ev.Kind {
-		case KindOutput, KindInput, KindResize, KindTranscript:
+		case KindOutput, KindInput, KindResize, KindTranscript, KindHost:
 		default:
 			return nil, fmt.Errorf("record: line %d: unknown event kind %q", line, ev.Kind)
 		}

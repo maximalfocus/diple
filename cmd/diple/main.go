@@ -5,6 +5,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -21,13 +22,14 @@ import (
 	"github.com/maximalfocus/diple/internal/agent"
 	"github.com/maximalfocus/diple/internal/card"
 	"github.com/maximalfocus/diple/internal/keys"
+	"github.com/maximalfocus/diple/internal/persona"
 	"github.com/maximalfocus/diple/internal/shim"
 	"github.com/maximalfocus/diple/internal/wrap"
 )
 
 const usage = `usage: diple [--record <fixture>] [--plain] [--marks=off] <agent> [args…]
        diple blocks <transcript>
-       diple on|off|status
+       diple on [<agent>…] | off | status
        diple stash|unstash [<agent>]
        diple bindings
 
@@ -41,9 +43,14 @@ agent directly.
   --motion=off            draw the raise's final frame only
   --copy-on-select=off    copy only on an explicit copy, not on every selection
   --no-archive            do not archive sent folds
-  on                      install the shims and put them on PATH
+  --identity              run the agent as itself, owning nothing
+                          (what an identity-only shim asks for)
+  on [<agent>…]           install shims for the agents found that Diple
+                          wraps, or for the agents named; one Diple has no
+                          adapter for runs as itself (identity-only)
   off                     remove the shims and the PATH line
-  status                  report the shims, PATH, and startup files
+  status                  report the agents found, wrapped and identity-only,
+                          the shims, PATH, and startup files
   blocks <transcript>     print the turns and blocks detected in a transcript
   stash [<agent>]         set the agent's saved tray aside
   unstash [<agent>]       give the stashed tray back to the next session
@@ -51,7 +58,57 @@ agent directly.
 `
 
 func main() {
+	if code, ok := runPersona(); ok {
+		os.Exit(code)
+	}
 	os.Exit(run(os.Args[1:]))
+}
+
+// personaEnv carries a wrapped session across Diple's re-execution through
+// the agent's persona. It is one of Diple's own variables, and like them it
+// never reaches the agent.
+const personaEnv = "DIPLE_PERSONA"
+
+// ownEnv is every variable Diple itself reads or sets. None of them reaches
+// the agent, so the agent, and any host integration running inside it, sees
+// what the bare CLI would.
+var ownEnv = []string{"DIPLE", "DIPLE_SHIM_DIR", personaEnv}
+
+func clearOwnEnv() {
+	for _, v := range ownEnv {
+		_ = os.Unsetenv(v)
+	}
+}
+
+// personaRun is what the persona needs to go on wrapping: the real agent
+// already located, the name the user typed, and Diple's own options.
+type personaRun struct {
+	Path           string `json:"path"`
+	Name           string `json:"name"`
+	Record         string `json:"record,omitempty"`
+	Plain          bool   `json:"plain,omitempty"`
+	NoMarks        bool   `json:"no_marks,omitempty"`
+	NoMotion       bool   `json:"no_motion,omitempty"`
+	NoCopyOnSelect bool   `json:"no_copy_on_select,omitempty"`
+	NoArchive      bool   `json:"no_archive,omitempty"`
+}
+
+// runPersona continues a wrapped session in the persona Diple re-executed
+// itself through. ok is false when this process is not a persona.
+func runPersona() (code int, ok bool) {
+	payload, isPersona := os.LookupEnv(personaEnv)
+	if !isPersona {
+		return 0, false
+	}
+	clearOwnEnv()
+	var pr personaRun
+	if err := json.Unmarshal([]byte(payload), &pr); err != nil || pr.Path == "" || pr.Name == "" {
+		fmt.Fprintln(os.Stderr, "diple: the persona was started without its session")
+		return 1, true
+	}
+	f := flags{record: pr.Record, plain: pr.Plain, noMarks: pr.NoMarks, noMotion: pr.NoMotion,
+		noCopyOnSelect: pr.NoCopyOnSelect, noArchive: pr.NoArchive}
+	return runWrapped(pr.Path, pr.Name, os.Args[1:], f), true
 }
 
 type flags struct {
@@ -61,6 +118,7 @@ type flags struct {
 	noMotion       bool
 	noCopyOnSelect bool
 	noArchive      bool
+	identity       bool
 }
 
 func run(args []string) int {
@@ -84,6 +142,8 @@ func run(args []string) int {
 			f.noCopyOnSelect, args = false, args[1:]
 		case a == "--no-archive":
 			f.noArchive, args = true, args[1:]
+		case a == "--identity":
+			f.identity, args = true, args[1:]
 		case a == "--record":
 			if len(args) < 2 {
 				fmt.Fprint(os.Stderr, usage)
@@ -144,13 +204,38 @@ func wrapAgent(name string, args []string, f flags) int {
 	}
 
 	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
-	if !interactive || os.Getenv("DIPLE") == "0" || agent.Bypass(args) {
+	bypass := !interactive || os.Getenv("DIPLE") == "0" || agent.Bypass(args)
+	clearOwnEnv()
+	if bypass || f.identity {
+		// A non-interactive form runs the real agent directly, and so does an
+		// identity-only one: the process in the pane is the real CLI, and
+		// Diple owns nothing there.
 		argv := append([]string{argv0}, args...)
 		err := syscall.Exec(path, argv, os.Environ())
 		fmt.Fprintf(os.Stderr, "diple: exec %s: %v\n", path, err)
 		return 126
 	}
 
+	// Before wrapping, Diple re-executes itself, same process, through the
+	// agent's persona, so a host that inspects the process in its pane sees
+	// the agent the user launched. A persona that cannot be made costs the
+	// host its name for the agent, never the session.
+	if self != "" {
+		if dir, err := persona.Dir(); err == nil {
+			if p, err := persona.Ensure(dir, self, argv0); err == nil {
+				payload, _ := json.Marshal(personaRun{Path: path, Name: argv0, Record: f.record, Plain: f.plain,
+					NoMarks: f.noMarks, NoMotion: f.noMotion, NoCopyOnSelect: f.noCopyOnSelect, NoArchive: f.noArchive})
+				env := append(os.Environ(), personaEnv+"="+string(payload))
+				_ = syscall.Exec(p, append([]string{argv0}, args...), env)
+			}
+		}
+	}
+	return runWrapped(path, argv0, args, f)
+}
+
+// runWrapped runs the located agent inside Diple, under the name the user
+// typed.
+func runWrapped(path, argv0 string, args []string, f flags) int {
 	ad, _ := adapter.For(argv0)
 	table, complaints := loadBindings()
 	for _, c := range complaints {
@@ -171,9 +256,11 @@ func wrapAgent(name string, args []string, f flags) int {
 }
 
 // shims implements `diple on|off|status`: the shims that make Diple
-// default-on, and what is in place right now.
+// default-on, and what is in place right now. `diple on` shims the catalogued
+// agents found on PATH that Diple wraps; `diple on <agent>…` shims the agents
+// named, and one without an adapter is identity-only.
 func shims(op string, args []string) int {
-	if len(args) != 0 {
+	if op != "on" && len(args) != 0 {
 		fmt.Fprint(os.Stderr, usage)
 		return 64
 	}
@@ -187,30 +274,57 @@ func shims(op string, args []string) int {
 		fmt.Fprintf(os.Stderr, "diple: %v\n", err)
 		return 1
 	}
-	agents := adapter.Names()
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "diple: %v\n", err)
+		return 1
+	}
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		self = resolved
+	}
+	path := os.Getenv("PATH")
 	switch op {
 	case "status":
-		fmt.Print(shim.Report(dir, agents, os.Getenv("PATH"), startup))
+		fmt.Print(shim.Report(dir, agent.Found(path, dir, self), path, startup))
 		return 0
 	case "on":
-		self, err := os.Executable()
+		var wrapped, identity []string
+		if len(args) == 0 {
+			for _, a := range agent.Found(path, dir, self) {
+				if _, ok := adapter.For(a); ok {
+					wrapped = append(wrapped, a)
+				}
+			}
+		}
+		for _, a := range args {
+			if !persona.ValidName(a) {
+				fmt.Fprintf(os.Stderr, "diple: %q is not a command name\n", a)
+				return 64
+			}
+			if _, err := agent.Locate(a, path, dir, self); err != nil {
+				fmt.Fprintf(os.Stderr, "diple: %s: command not found\n", a)
+				return 127
+			}
+			if _, ok := adapter.For(a); ok {
+				wrapped = append(wrapped, a)
+			} else {
+				identity = append(identity, a)
+			}
+		}
+		if len(wrapped)+len(identity) == 0 {
+			fmt.Printf("no agent Diple wraps is on PATH (it knows %s); `diple on <agent>` shims any other\n", strings.Join(adapter.Names(), ", "))
+			return 0
+		}
+		changed, err := shim.Install(dir, self, wrapped, identity, startup)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "diple: %v\n", err)
 			return 1
 		}
-		if resolved, err := filepath.EvalSymlinks(self); err == nil {
-			self = resolved
-		}
-		changed, err := shim.Install(dir, self, agents, startup)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "diple: %v\n", err)
-			return 1
-		}
-		report(changed, fmt.Sprintf("shims for %s already in place", strings.Join(agents, ", ")))
-		fmt.Printf("re-read your profile or run: export PATH=%q\n", dir+":"+os.Getenv("PATH"))
+		report(changed, fmt.Sprintf("shims for %s already in place", strings.Join(append(wrapped, identity...), ", ")))
+		fmt.Printf("re-read your profile or run: export PATH=%q\n", dir+":"+path)
 		return 0
 	default:
-		changed, err := shim.Remove(dir, agents, startup)
+		changed, err := shim.Remove(dir, startup)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "diple: %v\n", err)
 			return 1
@@ -260,7 +374,7 @@ func loadBindings() (keys.Table, []string) {
 // is set aside in the agent's one stash slot, and unstashing gives it to the
 // agent's next session when it binds its transcript.
 func stash(op string, args []string) int {
-	agent := "claude"
+	agent := ""
 	switch len(args) {
 	case 0:
 	case 1:
@@ -269,14 +383,28 @@ func stash(op string, args []string) int {
 		fmt.Fprint(os.Stderr, usage)
 		return 64
 	}
-	if _, ok := adapter.For(agent); !ok {
-		fmt.Fprintf(os.Stderr, "diple: no adapter for %s; known: %s\n", agent, strings.Join(adapter.Names(), ", "))
-		return 64
-	}
 	st, err := card.DefaultStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "diple: %v\n", err)
 		return 1
+	}
+	if agent == "" {
+		// Nothing assumes one agent: the current or most recent session's
+		// agent is meant, and Diple asks when that is ambiguous.
+		ok := false
+		if op == "stash" {
+			agent, ok = st.NewestAgent(adapter.Names())
+		} else {
+			agent, ok = st.StashedAgent(adapter.Names())
+		}
+		if !ok {
+			fmt.Fprintf(os.Stderr, "diple: which agent's tray? run `diple %s <agent>` with one of: %s\n", op, strings.Join(adapter.Names(), ", "))
+			return 64
+		}
+	}
+	if _, ok := adapter.For(agent); !ok {
+		fmt.Fprintf(os.Stderr, "diple: no adapter for %s; known: %s\n", agent, strings.Join(adapter.Names(), ", "))
+		return 64
 	}
 	var n int
 	if op == "stash" {
