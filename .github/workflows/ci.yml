@@ -134,6 +134,8 @@ jobs:
               sleep 1
             done
             [ -S "$HOME/.config/herdr/sessions/diple-ci/herdr.sock" ] || { cat "$RUNNER_TEMP/herdr.log"; exit 1; }
+            # A fresh server has no workspace, and a tab needs one to open in.
+            herdr workspace create --cwd "$PWD" --label diple-ci > /dev/null
           fi
           scripts/verify-hosts.sh "${{ matrix.host }}"
           scripts/verify-hosts.sh --plain "${{ matrix.host }}"
