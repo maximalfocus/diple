@@ -90,6 +90,17 @@ mkdir -p "$ctl/home"
 HOME="$ctl/home" XDG_DATA_HOME="$ctl/data" PATH="$bare_path" "$ctl/diple" on "$agent" >/dev/null || exit 1
 wrap_path="$ctl/data/diple/bin:$bare_path"
 
+# Cards need a tray and a host that reports state. An identity-only agent has
+# no tray, so the card keys and text would reach the agent itself as a prompt;
+# tmux reports no state, so there is nothing for cards to be checked against.
+if [ -n "$cards" ] && grep -q -- '--identity' "$ctl/data/diple/bin/$agent"; then
+	echo "note: $agent is identity-only and has no tray; --cards adds none"
+	cards=""
+elif [ -n "$cards" ] && [ "$host" = tmux ]; then
+	echo "note: tmux reports no state; --cards adds none"
+	cards=""
+fi
+
 quoted_args=""
 for a in ${agent_args[@]+"${agent_args[@]}"}; do quoted_args+=" $(printf '%q' "$a")"; done
 quoted_env=""
