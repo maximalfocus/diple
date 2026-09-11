@@ -146,11 +146,13 @@ identity() {
 	esac
 }
 
-# type sends text to the pane; key sends one control sequence.
+# type sends text to the pane; key sends one control sequence. herdr's pane
+# commands are used on 0.7 too: `agent send` there did not reliably reach the
+# agent as typed input.
 type_text() {
 	case "$host" in
 	tmux) tmux send-keys -t "$1" -l -- "$2" ;;
-	herdr) if [ -n "$herdr_v08" ]; then herdr pane send-text "$1" "$2" >/dev/null 2>&1; else herdr agent send "$1" "$2" >/dev/null 2>&1; fi ;;
+	herdr) herdr pane send-text "$1" "$2" >/dev/null 2>&1 ;;
 	esac
 }
 enter() { type_text "$1" $'\r'; }
@@ -162,6 +164,10 @@ escape() { type_text "$1" $'\033'; }
 prompt() {
 	if [ "$host" = herdr ] && [ -n "$herdr_v08" ]; then
 		herdr agent prompt "$1" "$2" >/dev/null 2>&1
+	elif [ "$host" = herdr ]; then
+		herdr pane send-text "$1" "$2" >/dev/null 2>&1
+		sleep 0.3
+		herdr pane send-keys "$1" enter >/dev/null 2>&1
 	else
 		type_text "$1" "$2"
 		enter "$1"
