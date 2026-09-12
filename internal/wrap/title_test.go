@@ -21,7 +21,9 @@ func TestTitlesAreFoundAcrossChunks(t *testing.T) {
 			got = append(got, string(seq))
 		}
 	}
-	want := []string{"\x1b]2;working\x07", "\x1b]0;a\x1b\\", "\x1b]1;icon\x07", "\x1b]2;split at the escape\x07"}
+	want := []string{
+		"\x1b]2;working\x07", "\x1b]0;a\x1b\\", "\x1b]1;icon\x07", "\x1b]2;split at the escape\x07",
+	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("titles = %q\nwant     %q", got, want)
 	}

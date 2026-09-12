@@ -83,7 +83,9 @@ capture_for() { printf '%s/%s%s.capture.jsonl' "$out" "$1" "${plain:+.plain}"; }
 # macOS tmux names a pane after its process group's leader, and a bash that
 # runs this line without exec'ing is that leader.
 wrapped() {
-	printf 'cd %s && export PATH=%s:$PATH DIPLE_FAKE_AGENT_SECONDS=%s && exec %s --record %s %s claude' \
+	local fmt='cd %s && export PATH=%s:$PATH DIPLE_FAKE_AGENT_SECONDS=%s'
+	fmt+=' && exec %s --record %s %s claude'
+	printf "$fmt" \
 		"$ctl" "$agent_dir" "${DIPLE_FAKE_AGENT_SECONDS:-25}" "$diple" "$(capture_for "$1")" "$plain"
 }
 
@@ -210,8 +212,15 @@ wait_for_capture() {
 # capture see it.
 host_identity() {
 	case "$1" in
-	tmux) printf 'name=%s\n' "$(tmux display-message -p -t diple-verify '#{pane_current_command}' 2>/dev/null)" >"$ctl/identity" ;;
-	herdr) herdr agent list 2>/dev/null | "$ctl/hostcheck" herdr-pane --pane "${2:-}" --name diple-verify >"$ctl/identity" ;;
+	tmux)
+		local name
+		name="$(tmux display-message -p -t diple-verify '#{pane_current_command}' 2>/dev/null)"
+		printf 'name=%s\n' "$name" >"$ctl/identity"
+		;;
+	herdr)
+		herdr agent list 2>/dev/null |
+			"$ctl/hostcheck" herdr-pane --pane "${2:-}" --name diple-verify >"$ctl/identity"
+		;;
 	esac
 }
 

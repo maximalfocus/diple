@@ -111,10 +111,12 @@ func TestShimRunsTheRealAgentAndBypassesOnRequest(t *testing.T) {
 	// `diple on <agent>` adds an agent Diple has no adapter for as
 	// identity-only, and refuses one that is not on PATH.
 	opencode := filepath.Join(realDir, "opencode")
-	if err := os.WriteFile(opencode, []byte("#!/bin/sh\necho \"real opencode $*\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(opencode,
+		[]byte("#!/bin/sh\necho \"real opencode $*\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := run(only, diple, "on", "opencode"); code != 0 || !strings.Contains(out, "opencode") {
+	if out, code := run(only, diple, "on", "opencode"); code != 0 ||
+		!strings.Contains(out, "opencode") {
 		t.Fatalf("on opencode: code=%d out=%s", code, out)
 	}
 	if out, code := run(only, diple, "on", "no-such-agent-xyz"); code != 127 {
@@ -127,8 +129,10 @@ func TestShimRunsTheRealAgentAndBypassesOnRequest(t *testing.T) {
 
 	// status reports what is found, what is wrapped and what is identity-only.
 	st, _ := run([]string{"PATH=" + shimDir + string(os.PathListSeparator) + realDir}, diple, "status")
-	for _, want := range []string{"agents found: claude, opencode", "wrapped: claude", "identity-only: opencode",
-		"on PATH: yes", "ahead of the real binary: claude, opencode"} {
+	for _, want := range []string{
+		"agents found: claude, opencode", "wrapped: claude", "identity-only: opencode",
+		"on PATH: yes", "ahead of the real binary: claude, opencode",
+	} {
 		if !strings.Contains(st, want) {
 			t.Fatalf("status lacks %q:\n%s", want, st)
 		}

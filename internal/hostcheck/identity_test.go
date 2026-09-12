@@ -32,7 +32,8 @@ func TestTheHostMustNameTheAgent(t *testing.T) {
 		t.Fatalf("the agent's own name failed: %v", f)
 	}
 	f := check("ghostty", captureWithHost(t, "fake", "name=diple state=unknown"), false)
-	if len(f) != 1 || !strings.Contains(f[0], `the host named the pane "diple", not the agent "fake"`) {
+	want := `the host named the pane "diple", not the agent "fake"`
+	if len(f) != 1 || !strings.Contains(f[0], want) {
 		t.Fatalf("failures = %v", f)
 	}
 }
@@ -40,7 +41,8 @@ func TestTheHostMustNameTheAgent(t *testing.T) {
 func TestHerdrIdentityFindsThePane(t *testing.T) {
 	list := []byte(`{"id":"cli:agent:list","result":{"agents":[
 		{"agent":"claude","agent_status":"working","pane_id":"w1:p1"},
-		{"agent":"claude","agent_status":"idle","pane_id":"w1:p7","name":"diple-verify"}],"type":"agent_list"}}`)
+		{"agent":"claude","agent_status":"idle","pane_id":"w1:p7","name":"diple-verify"}
+	],"type":"agent_list"}}`)
 	if got := herdrIdentity(list, "w1:p7", ""); got != "name=claude state=idle" {
 		t.Fatalf("by pane: %q", got)
 	}

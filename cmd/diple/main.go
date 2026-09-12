@@ -223,8 +223,11 @@ func wrapAgent(name string, args []string, f flags) int {
 	if self != "" {
 		if dir, err := persona.Dir(); err == nil {
 			if p, err := persona.Ensure(dir, self, argv0); err == nil {
-				payload, _ := json.Marshal(personaRun{Path: path, Name: argv0, Record: f.record, Plain: f.plain,
-					NoMarks: f.noMarks, NoMotion: f.noMotion, NoCopyOnSelect: f.noCopyOnSelect, NoArchive: f.noArchive})
+				payload, _ := json.Marshal(personaRun{
+					Path: path, Name: argv0, Record: f.record, Plain: f.plain,
+					NoMarks: f.noMarks, NoMotion: f.noMotion,
+					NoCopyOnSelect: f.noCopyOnSelect, NoArchive: f.noArchive,
+				})
 				env := append(os.Environ(), personaEnv+"="+string(payload))
 				_ = syscall.Exec(p, append([]string{argv0}, args...), env)
 			}
@@ -312,7 +315,8 @@ func shims(op string, args []string) int {
 			}
 		}
 		if len(wrapped)+len(identity) == 0 {
-			fmt.Printf("no agent Diple wraps is on PATH (it knows %s); `diple on <agent>` shims any other\n", strings.Join(adapter.Names(), ", "))
+			fmt.Printf("no agent Diple wraps is on PATH (it knows %s); "+
+				"`diple on <agent>` shims any other\n", strings.Join(adapter.Names(), ", "))
 			return 0
 		}
 		changed, err := shim.Install(dir, self, wrapped, identity, startup)
@@ -320,7 +324,8 @@ func shims(op string, args []string) int {
 			fmt.Fprintf(os.Stderr, "diple: %v\n", err)
 			return 1
 		}
-		report(changed, fmt.Sprintf("shims for %s already in place", strings.Join(append(wrapped, identity...), ", ")))
+		report(changed, fmt.Sprintf("shims for %s already in place",
+			strings.Join(append(wrapped, identity...), ", ")))
 		fmt.Printf("re-read your profile or run: export PATH=%q\n", dir+":"+path)
 		return 0
 	default:
@@ -398,12 +403,14 @@ func stash(op string, args []string) int {
 			agent, ok = st.StashedAgent(adapter.Names())
 		}
 		if !ok {
-			fmt.Fprintf(os.Stderr, "diple: which agent's tray? run `diple %s <agent>` with one of: %s\n", op, strings.Join(adapter.Names(), ", "))
+			fmt.Fprintf(os.Stderr, "diple: which agent's tray? run `diple %s <agent>` with one of: %s\n",
+				op, strings.Join(adapter.Names(), ", "))
 			return 64
 		}
 	}
 	if _, ok := adapter.For(agent); !ok {
-		fmt.Fprintf(os.Stderr, "diple: no adapter for %s; known: %s\n", agent, strings.Join(adapter.Names(), ", "))
+		fmt.Fprintf(os.Stderr, "diple: no adapter for %s; known: %s\n",
+			agent, strings.Join(adapter.Names(), ", "))
 		return 64
 	}
 	var n int

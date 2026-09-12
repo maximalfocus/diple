@@ -33,14 +33,16 @@ func TestStashTakesTheMostRecentSessionsAgent(t *testing.T) {
 	if err := os.Chtimes(st.path("claude", "s1"), base, base); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chtimes(st.path("codex", "s2"), base.Add(time.Minute), base.Add(time.Minute)); err != nil {
+	if err := os.Chtimes(st.path("codex", "s2"),
+		base.Add(time.Minute), base.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if a, ok := st.NewestAgent(agents); !ok || a != "codex" {
 		t.Fatalf("NewestAgent = %q, %v; want codex", a, ok)
 	}
 	// Two trays written at the same instant: ask.
-	if err := os.Chtimes(st.path("claude", "s1"), base.Add(time.Minute), base.Add(time.Minute)); err != nil {
+	if err := os.Chtimes(st.path("claude", "s1"),
+		base.Add(time.Minute), base.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if a, ok := st.NewestAgent(agents); ok {

@@ -118,7 +118,8 @@ func (w *Writer) Transcript(sessionID string) {
 
 // Host records what the host called the wrapped pane, and its state.
 func (w *Writer) Host(identity string) {
-	w.write(wireEvent{At: w.since(), Kind: KindHost, Data: base64.StdEncoding.EncodeToString([]byte(identity))})
+	data := base64.StdEncoding.EncodeToString([]byte(identity))
+	w.write(wireEvent{At: w.since(), Kind: KindHost, Data: data})
 }
 
 // Close flushes and closes the fixture, returning the first write error.

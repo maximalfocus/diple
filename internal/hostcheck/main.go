@@ -112,7 +112,8 @@ func check(host, path string, plain bool) []string {
 			continue
 		}
 		if name := identityField(string(ev.Data), "name"); name != rec.Header.Agent {
-			failures = append(failures, fmt.Sprintf("the host named the pane %q, not the agent %q", name, rec.Header.Agent))
+			failures = append(failures, fmt.Sprintf("the host named the pane %q, not the agent %q",
+				name, rec.Header.Agent))
 		}
 	}
 

@@ -4,7 +4,8 @@
 # reports the same idle, working and blocked states for both. Run it from the
 # repository root on a machine where the agent is installed and logged in:
 #
-#   scripts/verify-identity.sh [--cards] [--env KEY=VALUE]... [--block <prompt>] [--cwd <dir>] <herdr|tmux> <agent> [-- <agent args>]
+#   scripts/verify-identity.sh [--cards] [--env KEY=VALUE]... [--block <prompt>]
+#                              [--cwd <dir>] <herdr|tmux> <agent> [-- <agent args>]
 #
 # It builds Diple from this checkout and shims the agent in a directory of its
 # own, so the user's own shims, startup files and Diple are never touched: the
@@ -41,7 +42,8 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$root"
 cards=""
 extra_env=()
-blocking_prompt='Use your shell tool to run exactly this command and nothing else: touch /tmp/diple-identity-probe' 
+blocking_prompt='Use your shell tool to run exactly this command and nothing else:'
+blocking_prompt+=' touch /tmp/diple-identity-probe'
 while :; do
 	case "${1:-}" in
 	--cards) cards=1; shift ;;
@@ -83,11 +85,15 @@ for d in "${dirs[@]}"; do
 	fi
 	bare_path="${bare_path:+$bare_path:}$d"
 done
-PATH="$bare_path" command -v "$agent" >/dev/null || { echo "SKIP $agent: not installed on this machine"; exit 3; }
+PATH="$bare_path" command -v "$agent" >/dev/null || {
+	echo "SKIP $agent: not installed on this machine"
+	exit 3
+}
 
 # This build's shim, in a directory and a HOME of its own.
 mkdir -p "$ctl/home"
-HOME="$ctl/home" XDG_DATA_HOME="$ctl/data" PATH="$bare_path" "$ctl/diple" on "$agent" >/dev/null || exit 1
+HOME="$ctl/home" XDG_DATA_HOME="$ctl/data" PATH="$bare_path" \
+	"$ctl/diple" on "$agent" >/dev/null || exit 1
 wrap_path="$ctl/data/diple/bin:$bare_path"
 
 # Cards need a tray and a host that reports state. An identity-only agent has
@@ -152,7 +158,11 @@ start() {
 # identity prints `name=<n> state=<s>` for a pane.
 identity() {
 	case "$host" in
-	tmux) printf 'name=%s state=-\n' "$(tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null)" ;;
+	tmux)
+		local name
+		name="$(tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null)"
+		printf 'name=%s state=-\n' "$name"
+		;;
 	herdr)
 		local line
 		line="$(herdr agent list 2>/dev/null | "$ctl/hostcheck" herdr-pane --pane "$1")"
@@ -206,7 +216,9 @@ await() {
 	return 1
 }
 
-go_build_hostcheck() { (cd "$root" && go build -o "$ctl/hostcheck" ./internal/hostcheck) || exit 1; }
+go_build_hostcheck() {
+	(cd "$root" && go build -o "$ctl/hostcheck" ./internal/hostcheck) || exit 1
+}
 go_build_hostcheck
 
 # --- one run --------------------------------------------------------------
@@ -214,7 +226,10 @@ go_build_hostcheck
 # run drives one pane through the states and prints one line per state seen.
 run() {
 	local mode="$1" path="$2" pane label="diple-id-$1-$$"
-	pane="$(start "$label" "env PATH=$path$quoted_env $agent$quoted_args")" || { echo "$mode start FAIL"; return; }
+	pane="$(start "$label" "env PATH=$path$quoted_env $agent$quoted_args")" || {
+		echo "$mode start FAIL"
+		return
+	}
 	panes+=("$pane")
 	sleep 6
 	if [ "$host" = tmux ]; then
@@ -243,15 +258,25 @@ run() {
 		echo "$mode cards $(identity "$pane")"
 	fi
 	prompt "$pane" "Count from 1 to 40, one number per line."
-	if await "$pane" working 30; then echo "$mode working $(identity "$pane")"; else echo "$mode working $(identity "$pane") (never working)"; fi
+	if await "$pane" working 30; then
+		echo "$mode working $(identity "$pane")"
+	else
+		echo "$mode working $(identity "$pane") (never working)"
+	fi
 	await "$pane" idle 120 >/dev/null
 	prompt "$pane" "$blocking_prompt"
-	if await "$pane" blocked 120; then echo "$mode blocked $(identity "$pane")"; else echo "$mode blocked $(identity "$pane") (never blocked)"; fi
+	if await "$pane" blocked 120; then
+		echo "$mode blocked $(identity "$pane")"
+	else
+		echo "$mode blocked $(identity "$pane") (never blocked)"
+	fi
 	escape "$pane"
 	await "$pane" idle 60 >/dev/null
 }
 
-echo "host $host $( [ "$host" = herdr ] && herdr --version | awk '{print $2}' || tmux -V | awk '{print $2}') agent $agent${cards:+ with three cards}"
+host_version="$( [ "$host" = herdr ] && herdr --version | awk '{print $2}' ||
+	tmux -V | awk '{print $2}')"
+echo "host $host $host_version agent $agent${cards:+ with three cards}"
 report="$ctl/report"
 # Not in a pipeline: run records the panes it opens, so finish can close them.
 run bare "$bare_path" >"$report.bare"
@@ -274,7 +299,8 @@ for phase in $(awk '{print $2}' "$report.bare" "$report.wrapped" | sort -u); do
 			status=1
 		fi
 	done
-	if [ -n "$(sed -n "/^wrapped $phase /p" "$report.wrapped")" ] && [ "$w" != "$agent" ] && [ "$w" != "$b" ]; then
+	if [ -n "$(sed -n "/^wrapped $phase /p" "$report.wrapped")" ] &&
+		[ "$w" != "$agent" ] && [ "$w" != "$b" ]; then
 		echo "FAIL wrapped $phase: the host named the pane '$w', neither '$agent' nor the bare CLI's '$b'"
 		status=1
 	fi
@@ -286,8 +312,12 @@ for phase in $(awk '{print $2}' "$report.bare" "$report.wrapped" | sort -u); do
 		status=1
 	fi
 done
-reached="$(grep -v '(never' "$report.wrapped" | awk '{print $2}' | grep -v -e ready -e cards | tr '\n' ' ')"
+reached="$(grep -v '(never' "$report.wrapped" | awk '{print $2}' |
+	grep -v -e ready -e cards | tr '\n' ' ')"
 missed="$(grep '(never' "$report.bare" | awk '{print $2}' | tr '\n' ' ')"
-echo "states reached through Diple: ${reached:-none}${missed:+; not reached by the bare CLI either: $missed}"
-[ "$status" = 0 ] && echo "PASS $host $agent: the host names and reports the wrapped pane as the bare one${cards:+, three cards in its tray}"
+also="${missed:+; not reached by the bare CLI either: $missed}"
+echo "states reached through Diple: ${reached:-none}$also"
+with_cards="${cards:+, three cards in its tray}"
+[ "$status" = 0 ] &&
+	echo "PASS $host $agent: the host names and reports the wrapped pane as the bare one$with_cards"
 exit "$status"

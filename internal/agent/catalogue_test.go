@@ -24,7 +24,10 @@ func TestTheCatalogueIsSortedAndHoldsTheAdapterAgents(t *testing.T) {
 func TestFoundListsOnlyAgentsOnPathOutsideTheShimDirectory(t *testing.T) {
 	real := t.TempDir()
 	shims := t.TempDir()
-	for _, p := range []string{filepath.Join(real, "codex"), filepath.Join(shims, "claude"), filepath.Join(real, "not-an-agent")} {
+	for _, p := range []string{
+		filepath.Join(real, "codex"), filepath.Join(shims, "claude"),
+		filepath.Join(real, "not-an-agent"),
+	} {
 		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}

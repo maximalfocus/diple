@@ -37,7 +37,8 @@ func Dir() (string, error) {
 // ValidName reports whether name can be a persona: a plain file name, as the
 // user typed it.
 func ValidName(name string) bool {
-	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, `/\`) && !strings.ContainsRune(name, 0)
+	return name != "" && name != "." && name != ".." &&
+		!strings.ContainsAny(name, `/\`) && !strings.ContainsRune(name, 0)
 }
 
 // Build identifies a Diple build by the content of its binary, so an

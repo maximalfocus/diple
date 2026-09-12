@@ -71,7 +71,9 @@ func TestMain(m *testing.M) {
 
 func env() []string {
 	// Personas go to a cache of the test's own, never the developer's.
-	return append(os.Environ(), "PATH="+fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"), "XDG_CACHE_HOME="+cacheDir)
+	return append(os.Environ(),
+		"PATH="+fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"XDG_CACHE_HOME="+cacheDir)
 }
 
 func exitCode(err error) int {

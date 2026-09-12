@@ -64,12 +64,14 @@ func TestInstallPutsShimsAndThePathLineInPlaceIdempotently(t *testing.T) {
 
 func TestAnIdentityOnlyShimAsksDipleToRunTheAgentAsItself(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := Install(dir, "/opt/diple", []string{"claude"}, []string{"opencode"}, nil); err != nil {
+	if _, err := Install(dir, "/opt/diple",
+		[]string{"claude"}, []string{"opencode"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	p := filepath.Join(dir, "opencode")
 	body, _ := os.ReadFile(p)
-	if !strings.Contains(string(body), `exec "$diple" --identity opencode "$@"`) || !IsIdentity(p) || !IsShim(p) {
+	if !strings.Contains(string(body), `exec "$diple" --identity opencode "$@"`) ||
+		!IsIdentity(p) || !IsShim(p) {
 		t.Fatalf("identity-only shim:\n%s", body)
 	}
 	wrapped, identity := Shims(dir)
@@ -86,7 +88,8 @@ func TestRemoveTakesBackExactlyWhatWasAdded(t *testing.T) {
 	if err := os.WriteFile(rc, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Install(dir, "/opt/diple", []string{"claude"}, []string{"opencode"}, []string{rc}); err != nil {
+	if _, err := Install(dir, "/opt/diple",
+		[]string{"claude"}, []string{"opencode"}, []string{rc}); err != nil {
 		t.Fatal(err)
 	}
 	// Something of the user's in the same directory stays.
@@ -128,7 +131,8 @@ func TestReportSaysWhatIsFoundShimmedAndWhereTheShimsStand(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := Install(dir, "/opt/diple", []string{"claude"}, []string{"opencode"}, nil); err != nil {
+	if _, err := Install(dir, "/opt/diple",
+		[]string{"claude"}, []string{"opencode"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, a := range []string{"claude", "opencode", "codex"} {
@@ -142,12 +146,16 @@ func TestReportSaysWhatIsFoundShimmedAndWhereTheShimsStand(t *testing.T) {
 	if !ahead.OnPath || len(ahead.Ahead) != 2 || len(ahead.Behind) != 0 {
 		t.Fatalf("ahead = %+v", ahead)
 	}
-	if strings.Join(ahead.Wrapped, ",") != "claude" || strings.Join(ahead.Identity, ",") != "opencode" ||
+	if strings.Join(ahead.Wrapped, ",") != "claude" ||
+		strings.Join(ahead.Identity, ",") != "opencode" ||
 		strings.Join(ahead.Unshimmed, ",") != "codex" {
 		t.Fatalf("report = %+v", ahead)
 	}
 	text := ahead.String()
-	for _, want := range []string{"agents found: claude, codex, opencode", "wrapped: claude", "identity-only: opencode", "found without a shim: codex"} {
+	for _, want := range []string{
+		"agents found: claude, codex, opencode", "wrapped: claude",
+		"identity-only: opencode", "found without a shim: codex",
+	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report lacks %q:\n%s", want, text)
 		}
@@ -177,7 +185,9 @@ func TestShimUsesOnlyBuiltinsAndIsRecognisable(t *testing.T) {
 			}
 		}
 		script := strings.Join(code, "\n")
-		for _, external := range []string{"dirname", "basename", "readlink", "realpath", "sed", "awk", "grep", "tr ", "env "} {
+		for _, external := range []string{
+			"dirname", "basename", "readlink", "realpath", "sed", "awk", "grep", "tr ", "env ",
+		} {
 			if strings.Contains(script, external) {
 				t.Fatalf("the shim calls %s; only builtins are safe:\n%s", external, script)
 			}

@@ -25,7 +25,8 @@ func identityField(identity, key string) string {
 func herdrPaneMain(args []string) int {
 	fs := flag.NewFlagSet("herdr-pane", flag.ContinueOnError)
 	pane := fs.String("pane", "", "the pane id herdr gave the wrapped session")
-	name := fs.String("name", "", "the agent name the wrapped session was started under, for herdr 0.7")
+	name := fs.String("name", "",
+		"the agent name the wrapped session was started under, for herdr 0.7")
 	if err := fs.Parse(args); err != nil {
 		return 64
 	}
