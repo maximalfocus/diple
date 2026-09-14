@@ -117,11 +117,13 @@ a new run.
 
 ### Landing
 
-Until the repository can require a check, the maintainer lands a pull request
-only when `scripts/gate-status.sh <pr>` reports `gate` green on its current
-head and, for a change outside the documentation allowlist, a passing macOS
-acceptance run of that head; anything else refuses. A red `main` lets only its
-own fix land.
+GitHub takes a change into `main` only through a pull request merged by
+squash, and refuses to merge one until `gate` has passed on its head;
+`RELEASE.md` names the rulesets. No server check reads the body, so the
+maintainer lands a pull request only when `scripts/gate-status.sh <pr>` reports
+`gate` green on its current head and, for a change outside the documentation
+allowlist, a passing macOS acceptance run of that head; anything else refuses.
+A red `main` lets only its own fix land.
 
 ## Layout
 
