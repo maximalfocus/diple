@@ -100,11 +100,13 @@ launcher is kept at a stable path under the captures directory.
 ## Check enforcement
 
 Every pull request runs the verification tiers `CONTRIBUTING.md` describes,
-and `gate` is the check a landing reads. On the account's current plan GitHub
-refuses both rulesets and branch protection for a private repository
-(`Upgrade to GitHub Pro or make this repository public`, checked on
-2026-09-11), so server enforcement cannot be enabled before publication. Until
-then the landing procedure enforces it: `scripts/gate-status.sh <pr>` must
+and `gate` is the check a landing reads. GitHub enforces the landing path on
+`main` with two rulesets, and neither has a bypass, not even for an
+administrator. `require-pull-request` takes a change only through a pull
+request, merged by squash, keeps history linear, and refuses force-pushes and
+deleting the branch. `require-gate` refuses to merge a pull request until
+`gate` has passed on its head. No server check reads a pull request's body, so
+the landing procedure still checks the rest: `scripts/gate-status.sh <pr>` must
 report `gate` green on the pull request's current head and, for a change
 outside the documentation allowlist, a passing macOS acceptance run of that
 head recorded in its body.
@@ -113,9 +115,11 @@ head recorded in its body.
 
 - [ ] Register `getdiple.sh`.
 - [ ] Cut the release, fill the formula's URLs and checksums, publish the tap.
-- [ ] Once the repository is public, configure a `main` ruleset that requires
+- [x] Once the repository is public, configure a `main` ruleset that requires
       the `gate` check and forbids direct pushes, and verify both: a direct
       push to `main` is refused, and a pull request whose `gate` is red cannot
-      merge.
+      merge. Done with the two rulesets above: a direct push to `main` was
+      rejected for both rules, and GitHub refused to merge #48, whose `gate`
+      was red, which was then closed unmerged.
 - [ ] Make the repository public. This is a separate, explicitly invoked step —
       publication is never part of an implementation run.
