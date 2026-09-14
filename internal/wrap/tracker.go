@@ -116,10 +116,10 @@ func (t *Tracker) tick() {
 }
 
 // sessionKey identifies the session a tray belongs to. The transcript's own id
-// is the right name for it, but a transcript Diple could not parse — one from a
-// CLI version the adapter does not pin — still identifies its session by the
-// file it lives in. What a transcript's contents decide is what can be aligned,
-// never whether the cards written against it are worth keeping.
+// is the right name for it, but a transcript Diple could not parse still
+// identifies its session by the file it lives in. What a transcript's contents
+// decide is what can be aligned, never whether the cards written against it
+// are worth keeping.
 func sessionKey(tr *adapter.Transcript, path string) string {
 	if tr != nil && tr.SessionID != "" {
 		return tr.SessionID
@@ -145,8 +145,8 @@ func (t *Tracker) Path() string {
 }
 
 // Transcript returns the latest parsed transcript and the last error. A
-// version the adapter was not verified against is reported as the error
-// and leaves the transcript nil, so the session falls back to paragraphs.
+// transcript that fails to parse is reported as the error and leaves the last
+// good one in place; with none, the session falls back to paragraphs.
 func (t *Tracker) Transcript() (*adapter.Transcript, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

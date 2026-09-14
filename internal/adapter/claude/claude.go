@@ -168,7 +168,6 @@ func (a *Adapter) Parse(r io.Reader) (*adapter.Transcript, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 256<<20)
 	t := &adapter.Transcript{Agent: a.Name()}
-	verified := false
 	line := 0
 	for sc.Scan() {
 		line++
@@ -182,13 +181,11 @@ func (a *Adapter) Parse(r io.Reader) (*adapter.Transcript, error) {
 		}
 		if e.Version != "" && t.Version == "" {
 			t.Version = e.Version
+			t.Unverified = true
 			for _, v := range Verified {
 				if v == e.Version {
-					verified = true
+					t.Unverified = false
 				}
-			}
-			if !verified {
-				return nil, &adapter.VersionError{Agent: a.Name(), Version: e.Version, Verified: a.VerifiedVersions()}
 			}
 		}
 		if e.SessionID != "" && t.SessionID == "" {

@@ -462,7 +462,7 @@ func printBlocks(args []string) int {
 		}
 		tr, perr = ad.Parse(f)
 		chosen = name
-		if perr == nil || errors.As(perr, new(*adapter.VersionError)) {
+		if perr == nil {
 			break
 		}
 	}
@@ -470,7 +470,11 @@ func printBlocks(args []string) int {
 		fmt.Fprintf(os.Stderr, "diple: %v\n", perr)
 		return 1
 	}
-	fmt.Printf("agent %s version %s session %s turns %d\n", chosen, tr.Version, tr.SessionID, len(tr.Turns))
+	version := tr.Version
+	if tr.Unverified {
+		version += " (unverified)"
+	}
+	fmt.Printf("agent %s version %s session %s turns %d\n", chosen, version, tr.SessionID, len(tr.Turns))
 	for _, turn := range tr.Turns {
 		fmt.Printf("turn %d\n", turn.Ordinal)
 		for i, b := range turn.Blocks {
