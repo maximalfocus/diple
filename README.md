@@ -32,17 +32,22 @@ local-only: no network calls, no model calls of its own, no telemetry.
 
 ```
 go build -o ~/.local/bin/diple ./cmd/diple   # or: brew install <tap>/diple
-diple on                                     # shims for every supported agent
+diple on                                     # shims for the agents you have
 ```
 
-`diple on` puts a shim for each supported CLI in `$XDG_DATA_HOME/diple/bin`
-and adds one marked block to your shell startup files that puts that directory
-first on `PATH`. Re-read your profile and `claude`, `codex`, and `pi` run under
-Diple from anywhere — a bare shell, a script, a `tmux` pane, a `herdr` pane.
+`diple on` puts a shim in `$XDG_DATA_HOME/diple/bin` for each of `claude`,
+`codex`, and `pi` that is on your `PATH`, and adds one marked block to your
+shell startup files that puts that directory first. Re-read your profile and
+they run under Diple from anywhere — a bare shell, a script, a `tmux` pane, a
+`herdr` pane — and the host still names the agent: `herdr`'s agent list shows
+it with its state, and `tmux` shows its name, exactly as without Diple.
+
+`diple on <agent>` adds any other agent CLI, such as `opencode`, as
+identity-only: it runs as itself, and Diple owns nothing in its pane.
 
 ```
-diple status     # what is installed, where it stands on PATH
-diple off        # remove the shims and the PATH block
+diple status     # agents found, wrapped and identity-only, and where the shims stand
+diple off        # remove every shim and the PATH block
 DIPLE=0 claude   # run the real CLI once, unwrapped
 diple claude     # run one wrapped session without shims
 ```
@@ -85,7 +90,9 @@ effect.
 
 A free card can carry attachments: `@path` references a file, and `!command`
 runs the command once, then, and carries what it printed. `diple stash` sets a
-tray aside and `diple unstash` gives it back to the next session of that agent.
+tray aside and `diple unstash` gives it back to the next session of that agent;
+without an agent named, both take the one you used last and ask when that is
+unclear.
 
 ```
 diple --plain claude              # draw without colour

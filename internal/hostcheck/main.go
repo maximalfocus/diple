@@ -105,6 +105,17 @@ func check(host, path string, plain bool) []string {
 	if body != agent {
 		failures = append(failures, "the agent's bytes were not forwarded unchanged with an empty tray")
 	}
+	// R-017: a host that names the process in its pane names the agent the
+	// user launched, never Diple.
+	for _, ev := range rec.Events {
+		if ev.Kind != record.KindHost {
+			continue
+		}
+		if name := identityField(string(ev.Data), "name"); name != rec.Header.Agent {
+			failures = append(failures, fmt.Sprintf("the host named the pane %q, not the agent %q",
+				name, rec.Header.Agent))
+		}
+	}
 
 	// Second pass: the session as it was actually driven in the host.
 	driven, cards, copies, err := replay(rec, true, plain)
@@ -169,6 +180,10 @@ func replay(rec *record.Recording, withInput, plain bool) (string, int, int, err
 		return "", 0, 0, fmt.Errorf("session did not start: %v", err)
 	}
 	for _, ev := range rec.Events {
+		// What the host reported is not something the session saw.
+		if ev.Kind == record.KindHost {
+			continue
+		}
 		at = base.Add(ev.At)
 		if err := sess.Tick(); err != nil {
 			return "", 0, 0, fmt.Errorf("the raise failed: %v", err)

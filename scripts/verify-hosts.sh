@@ -78,9 +78,14 @@ capture_for() { printf '%s/%s%s.capture.jsonl' "$out" "$1" "${plain:+.plain}"; }
 # checkout that has been worked in with the real agent has transcripts there:
 # aligning the canned agent's rows against one of those would leave every block
 # without rows, and nothing to raise, for a reason that has nothing to do with
-# the host.
+# the host. Diple is exec'd, as a shell execs the agent a user types, so the
+# pane's process is the agent's persona and not a shell left waiting on it:
+# macOS tmux names a pane after its process group's leader, and a bash that
+# runs this line without exec'ing is that leader.
 wrapped() {
-	printf 'cd %s && PATH=%s:$PATH DIPLE_FAKE_AGENT_SECONDS=%s %s --record %s %s claude' \
+	local fmt='cd %s && export PATH=%s:$PATH DIPLE_FAKE_AGENT_SECONDS=%s'
+	fmt+=' && exec %s --record %s %s claude'
+	printf "$fmt" \
 		"$ctl" "$agent_dir" "${DIPLE_FAKE_AGENT_SECONDS:-25}" "$diple" "$(capture_for "$1")" "$plain"
 }
 
@@ -201,6 +206,24 @@ wait_for_capture() {
 	[ -s "$file" ]
 }
 
+# host_identity asks the host what it calls the wrapped pane, and its state,
+# which R-017 says must name the agent the user launched, never Diple. The
+# answer is appended to the capture, so the host check and every replay of the
+# capture see it.
+host_identity() {
+	case "$1" in
+	tmux)
+		local name
+		name="$(tmux display-message -p -t diple-verify '#{pane_current_command}' 2>/dev/null)"
+		printf 'name=%s\n' "$name" >"$ctl/identity"
+		;;
+	herdr)
+		herdr agent list 2>/dev/null |
+			"$ctl/hostcheck" herdr-pane --pane "${2:-}" --name diple-verify >"$ctl/identity"
+		;;
+	esac
+}
+
 # start_host returns 0 when the session was started and, for a driven host,
 # the gesture was handed to it; 3 when the host is not installed; 4 when it is
 # installed but could not be started or driven.
@@ -225,6 +248,7 @@ start_host() {
 		tmux kill-session -t diple-verify 2>/dev/null
 		tmux new-session -d -s diple-verify -x 100 -y 30 "$cmd" || return 4
 		sleep 3
+		host_identity tmux
 		for part in "${gesture_parts[@]}"; do
 			tmux send-keys -t diple-verify -l -- "$part" || return 4
 			sleep 1
@@ -242,6 +266,7 @@ start_host() {
 			printf '%s\n' "$pane" >"$ctl/herdr.pane"
 			herdr pane run "$pane" "$cmd" >/dev/null 2>&1 || return 4
 			sleep 4
+			host_identity herdr "$pane"
 			for part in "${gesture_parts[@]}"; do
 				herdr pane send-text "$pane" "$part" >/dev/null 2>&1 || return 4
 				sleep 1
@@ -249,6 +274,7 @@ start_host() {
 		else
 			herdr agent start diple-verify --cwd "$root" --no-focus -- sh -c "$cmd" >/dev/null 2>&1 || return 4
 			sleep 4
+			host_identity herdr
 			for part in "${gesture_parts[@]}"; do
 				herdr agent send diple-verify "$part" >/dev/null 2>&1 || return 4
 				sleep 1
@@ -366,6 +392,19 @@ for host in "${hosts[@]}"; do
 		continue
 	fi
 	wait_for_settled "$file"
+	case "$host" in
+	tmux | herdr)
+		# A host that names the pane must have said what it calls it.
+		if [ ! -s "$ctl/identity" ]; then
+			echo "FAIL $host: the host did not say what it calls the wrapped pane"
+			status=1
+			continue
+		fi
+		echo "$host names the pane: $(cat "$ctl/identity")"
+		printf '{"at":0,"kind":"host","data":"%s"}\n' "$(base64 <"$ctl/identity" | tr -d '\n')" >>"$file"
+		rm -f "$ctl/identity"
+		;;
+	esac
 	version="$(host_version "$host")"
 	if ! "$ctl/hostcheck" --host "$host" --host-version "$version" ${plain:+--plain} "$file"; then
 		status=1

@@ -2,7 +2,8 @@
 // Diple ahead of the real agent CLIs on PATH. A shim is deliberately tiny: it
 // executes Diple with the agent's name, and Diple finds the real CLI by
 // skipping the shim's own directory, so no path to an agent is ever written
-// down.
+// down. A shim for an agent Diple has no adapter for is identity-only: it asks
+// Diple to run the agent as itself, owning nothing in its pane.
 package shim
 
 import (
@@ -58,23 +59,42 @@ func StartupFiles() ([]string, error) {
 // refuse to execute it as if it were the real agent.
 const Marker = "# diple shim for "
 
+// identityFlag is what an identity-only shim passes to Diple.
+const identityFlag = "--identity"
+
 // IsShim reports whether path is one of Diple's own shims. Executing one as
 // the real agent would send Diple straight back to itself.
 func IsShim(path string) bool {
+	return strings.Contains(head(path), Marker)
+}
+
+// IsIdentity reports whether path is an identity-only shim.
+func IsIdentity(path string) bool {
+	h := head(path)
+	return strings.Contains(h, Marker) && strings.Contains(h, `exec "$diple" `+identityFlag+" ")
+}
+
+// head is the start of a file, enough to hold a whole shim.
+func head(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		return ""
 	}
 	defer f.Close()
-	buf := make([]byte, 512)
+	buf := make([]byte, 2048)
 	n, _ := f.Read(buf)
-	return strings.Contains(string(buf[:n]), Marker)
+	return string(buf[:n])
 }
 
 // Script is the shim for one agent. It fails loudly when Diple is gone
 // rather than falling back to the name it stands in for, which would send it
-// straight back to itself.
-func Script(agent, diple string) string {
+// straight back to itself. An identity-only shim asks Diple to run the agent
+// as itself.
+func Script(agent, diple string, identity bool) string {
+	flag := ""
+	if identity {
+		flag = identityFlag + " "
+	}
 	return fmt.Sprintf(`#!/bin/sh
 %s%s. Installed by "diple on"; remove with "diple off".
 # The shim tells Diple which directory to skip when it looks for the real
@@ -95,27 +115,39 @@ if [ -z "$diple" ] || [ ! -x "$diple" ]; then
 	echo "diple: the diple binary is gone; run 'diple off' to remove these shims" >&2
 	exit 127
 fi
-exec "$diple" %s "$@"
-`, Marker, agent, agent, diple, agent)
+exec "$diple" %s%s "$@"
+`, Marker, agent, agent, diple, flag, agent)
 }
 
-// Install writes a shim for each agent and adds the PATH block to the
-// startup files. It reports the files it changed, and is safe to run twice.
-func Install(dir, diple string, agents []string, startup []string) ([]string, error) {
+// Install writes a shim for each wrapped and each identity-only agent and adds
+// the PATH block to the startup files. It reports the files it changed, and
+// is safe to run twice.
+func Install(dir, diple string, wrapped, identity []string, startup []string) ([]string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
 	var changed []string
-	for _, a := range agents {
+	write := func(a string, id bool) error {
 		p := filepath.Join(dir, a)
-		want := Script(a, diple)
+		want := Script(a, diple, id)
 		if old, err := os.ReadFile(p); err == nil && string(old) == want {
-			continue
+			return nil
 		}
 		if err := os.WriteFile(p, []byte(want), 0o755); err != nil {
-			return changed, err
+			return err
 		}
 		changed = append(changed, p)
+		return nil
+	}
+	for _, a := range wrapped {
+		if err := write(a, false); err != nil {
+			return changed, err
+		}
+	}
+	for _, a := range identity {
+		if err := write(a, true); err != nil {
+			return changed, err
+		}
 	}
 	for _, f := range startup {
 		added, err := addBlock(f, dir)
@@ -129,11 +161,35 @@ func Install(dir, diple string, agents []string, startup []string) ([]string, er
 	return changed, nil
 }
 
-// Remove deletes the shims and takes the block back out of the startup
-// files. It reports what it changed and is safe to run twice.
-func Remove(dir string, agents []string, startup []string) ([]string, error) {
+// Shims lists the agents with a shim in dir, split into wrapped and
+// identity-only. Anything in dir that is not Diple's own shim is left out.
+func Shims(dir string) (wrapped, identity []string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil
+	}
+	for _, e := range entries {
+		p := filepath.Join(dir, e.Name())
+		if e.IsDir() || !IsShim(p) {
+			continue
+		}
+		if IsIdentity(p) {
+			identity = append(identity, e.Name())
+		} else {
+			wrapped = append(wrapped, e.Name())
+		}
+	}
+	sort.Strings(wrapped)
+	sort.Strings(identity)
+	return wrapped, identity
+}
+
+// Remove deletes every shim Diple wrote in dir and takes the block back out
+// of the startup files. It reports what it changed and is safe to run twice.
+func Remove(dir string, startup []string) ([]string, error) {
 	var changed []string
-	for _, a := range agents {
+	wrapped, identity := Shims(dir)
+	for _, a := range append(wrapped, identity...) {
 		p := filepath.Join(dir, a)
 		err := os.Remove(p)
 		if err == nil {
@@ -233,23 +289,28 @@ func removeBlock(file string) (bool, error) {
 // Status is what `diple status` reports.
 type Status struct {
 	Dir       string
-	Installed []string // agents that have a shim
-	Missing   []string // agents that do not
+	Found     []string // catalogued agents with a real executable on PATH
+	Wrapped   []string // agents with a shim that Diple wraps
+	Identity  []string // agents with an identity-only shim
+	Unshimmed []string // found agents that have no shim
 	OnPath    bool     // the shim directory is on PATH
 	Ahead     []string // agents whose shim comes before the real binary
 	Behind    []string // agents whose real binary comes first
 	Files     []string // startup files carrying the block
 }
 
-// Report reads the current state from the filesystem, PATH, and the startup
-// files.
-func Report(dir string, agents []string, path string, startup []string) Status {
-	st := Status{Dir: dir}
-	for _, a := range agents {
-		if isExecutable(filepath.Join(dir, a)) {
-			st.Installed = append(st.Installed, a)
-		} else {
-			st.Missing = append(st.Missing, a)
+// Report reads the current state from the shim directory, PATH, and the
+// startup files. found is the catalogued agents on PATH.
+func Report(dir string, found []string, path string, startup []string) Status {
+	st := Status{Dir: dir, Found: append([]string(nil), found...)}
+	st.Wrapped, st.Identity = Shims(dir)
+	shimmed := map[string]bool{}
+	for _, a := range append(append([]string(nil), st.Wrapped...), st.Identity...) {
+		shimmed[a] = true
+	}
+	for _, a := range found {
+		if !shimmed[a] {
+			st.Unshimmed = append(st.Unshimmed, a)
 		}
 	}
 	dirs := filepath.SplitList(path)
@@ -261,7 +322,9 @@ func Report(dir string, agents []string, path string, startup []string) Status {
 		}
 	}
 	st.OnPath = shimAt >= 0
-	for _, a := range st.Installed {
+	installed := append(append([]string(nil), st.Wrapped...), st.Identity...)
+	sort.Strings(installed)
+	for _, a := range installed {
 		realAt := -1
 		for i, d := range dirs {
 			if i == shimAt {
@@ -286,8 +349,7 @@ func Report(dir string, agents []string, path string, startup []string) Status {
 			st.Files = append(st.Files, f)
 		}
 	}
-	sort.Strings(st.Installed)
-	sort.Strings(st.Missing)
+	sort.Strings(st.Found)
 	return st
 }
 
@@ -295,9 +357,11 @@ func Report(dir string, agents []string, path string, startup []string) Status {
 func (s Status) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "shim directory: %s\n", s.Dir)
-	fmt.Fprintf(&b, "shims installed: %s\n", list(s.Installed))
-	if len(s.Missing) > 0 {
-		fmt.Fprintf(&b, "no shim: %s\n", list(s.Missing))
+	fmt.Fprintf(&b, "agents found: %s\n", list(s.Found))
+	fmt.Fprintf(&b, "wrapped: %s\n", list(s.Wrapped))
+	fmt.Fprintf(&b, "identity-only: %s\n", list(s.Identity))
+	if len(s.Unshimmed) > 0 {
+		fmt.Fprintf(&b, "found without a shim: %s (`diple on <agent>` adds one)\n", list(s.Unshimmed))
 	}
 	if s.OnPath {
 		fmt.Fprintf(&b, "on PATH: yes\n")
