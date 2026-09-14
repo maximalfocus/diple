@@ -228,3 +228,5 @@ func (r *Recording) Replay(sink Sink) error {
 	}
 	return nil
 }
+
+// A throwaway change that carries no host evidence, so gate is red.
