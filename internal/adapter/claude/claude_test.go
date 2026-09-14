@@ -233,7 +233,11 @@ func TestFallbackGivesEachListItemItsOwnBlock(t *testing.T) {
 	for _, c := range modes {
 		_, rows, tr := loadFixture(t, c.mode)
 		tr.Turns[0].Blocks = blocks.Parse("Something the screen never showed.")
-		for name, al := range map[string][]adapter.TurnAlignment{"missing": a.Fallback(rows), "corrupt": a.Align(tr, rows)} {
+		cases := map[string][]adapter.TurnAlignment{
+			"missing": a.Fallback(rows),
+			"corrupt": a.Align(tr, rows),
+		}
+		for name, al := range cases {
 			var got []adapter.AlignedBlock
 			for _, turn := range al {
 				got = append(got, turn.Blocks...)
@@ -243,7 +247,8 @@ func TestFallbackGivesEachListItemItsOwnBlock(t *testing.T) {
 					continue
 				}
 				if !hasSpan(got, w.first+c.offset, w.last+c.offset) {
-					t.Fatalf("%s %s: no block covers only %q (rows %d-%d): %+v", c.mode, name, w.text, w.first+c.offset, w.last+c.offset, got)
+					t.Fatalf("%s %s: no block covers only %q (rows %d-%d): %+v",
+						c.mode, name, w.text, w.first+c.offset, w.last+c.offset, got)
 				}
 			}
 		}
@@ -280,7 +285,8 @@ func TestOneUnmatchedBlockKeepsTheOthers(t *testing.T) {
 		}
 		// A code line still names its code block.
 		for _, b := range al[0].Blocks {
-			if b.Kind == blocks.CodeLine && (b.Parent < 0 || al[0].Blocks[b.Parent].Kind != blocks.CodeBlock) {
+			orphan := b.Parent < 0 || al[0].Blocks[b.Parent].Kind != blocks.CodeBlock
+			if b.Kind == blocks.CodeLine && orphan {
 				t.Fatalf("%s: code line %q lost its block: parent %d", c.mode, b.Text, b.Parent)
 			}
 		}

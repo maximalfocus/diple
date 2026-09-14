@@ -10,7 +10,8 @@ import (
 	"testing"
 )
 
-var fixtureTranscript = filepath.Join("..", "..", "internal", "adapter", "claude", "testdata", "2.1.268", "inline.transcript.jsonl")
+var fixtureTranscript = filepath.Join("..", "..", "internal", "adapter", "claude", "testdata",
+	"2.1.268", "inline.transcript.jsonl")
 
 func TestBlocksPrintsFixtureTranscript(t *testing.T) {
 	out, err := exec.Command(dipleBin, "blocks", fixtureTranscript).CombinedOutput()
@@ -54,7 +55,8 @@ func TestBlocksLabelsAnUnverifiedVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := filepath.Join(t.TempDir(), "transcript.jsonl")
-	if err := os.WriteFile(p, []byte(strings.ReplaceAll(string(data), "2.1.268", "9.9.9")), 0o600); err != nil {
+	unverified := strings.ReplaceAll(string(data), "2.1.268", "9.9.9")
+	if err := os.WriteFile(p, []byte(unverified), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out, err := exec.Command(dipleBin, "blocks", p).CombinedOutput()

@@ -97,7 +97,8 @@ func Assign(t *Transcript, rows []string, rules align.Rules) []TurnAlignment {
 			}
 		case parts[ti] != nil:
 			p := parts[ti]
-			ta.Blocks = partial(turn.Blocks, p.spans, p.matched, rows, regions[claimed[ti]].first, p.last, rules)
+			r := regions[claimed[ti]]
+			ta.Blocks = partial(turn.Blocks, p.spans, p.matched, rows, r.first, p.last, rules)
 		case claimed[ti] >= 0:
 			r := regions[claimed[ti]]
 			ta.Blocks = Paragraphs(rows, r.first, r.last, rules)
@@ -179,7 +180,8 @@ type partialMatch struct {
 // block keeps its rows, and the rows of every run of unmatched blocks, between
 // the matched blocks on either side of it or between one and the edge of the
 // region, become paragraphs, in row order.
-func partial(bs []blocks.Block, spans []align.Span, matched []bool, rows []string, from, to int, rules align.Rules) []AlignedBlock {
+func partial(bs []blocks.Block, spans []align.Span, matched []bool, rows []string,
+	from, to int, rules align.Rules) []AlignedBlock {
 	var out []AlignedBlock
 	at := make([]int, len(bs)) // where each block landed in out, -1 when it did not
 	next, lost := from, false
@@ -198,7 +200,8 @@ func partial(bs []blocks.Block, spans []align.Span, matched []bool, rows []strin
 			kept.Parent = at[b.Parent]
 		}
 		at[i] = len(out)
-		out = append(out, AlignedBlock{Block: kept, Span: Span{First: spans[i].First, Last: spans[i].Last}})
+		span := Span{First: spans[i].First, Last: spans[i].Last}
+		out = append(out, AlignedBlock{Block: kept, Span: span})
 		if b.Kind != blocks.CodeBlock {
 			next = spans[i].Last + 1 // a code block's lines follow it and move on
 		}

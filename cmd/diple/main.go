@@ -474,7 +474,8 @@ func printBlocks(args []string) int {
 	if tr.Unverified {
 		version += " (unverified)"
 	}
-	fmt.Printf("agent %s version %s session %s turns %d\n", chosen, version, tr.SessionID, len(tr.Turns))
+	fmt.Printf("agent %s version %s session %s turns %d\n",
+		chosen, version, tr.SessionID, len(tr.Turns))
 	for _, turn := range tr.Turns {
 		fmt.Printf("turn %d\n", turn.Ordinal)
 		for i, b := range turn.Blocks {

@@ -200,7 +200,8 @@ func TestAnUnverifiedVersionAlignsButNoFixtureTakesIt(t *testing.T) {
 	}
 	err = adapter.RequireVerified(a, tr)
 	var ve *adapter.VersionError
-	if !errors.As(err, &ve) || ve.Version != "0.99.0" || !strings.Contains(ve.Error(), fixtureVersion) {
+	if !errors.As(err, &ve) || ve.Version != "0.99.0" ||
+		!strings.Contains(ve.Error(), fixtureVersion) {
 		t.Fatalf("err = %v", err)
 	}
 }

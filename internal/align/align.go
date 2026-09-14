@@ -268,7 +268,8 @@ func Blocks(bs []blocks.Block, rows []string, start, end int, rules Rules) ([]Sp
 // row from r that is not noise. The block's text must begin on that row, which
 // is what keeps a searched-for block from matching a blank row or the middle
 // of another block.
-func blockAt(b blocks.Block, norm, rows []string, r, end int, rules Rules, exact bool) (Span, bool) {
+func blockAt(b blocks.Block, norm, rows []string, r, end int, rules Rules,
+	exact bool) (Span, bool) {
 	t := target(b)
 	if t == "" && b.Kind != blocks.ToolCall {
 		// A blank line inside a code block occupies exactly one row, and
