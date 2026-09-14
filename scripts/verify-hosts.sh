@@ -73,6 +73,7 @@ cp "$src/scripts/fake-agent.sh" "$agent"
 chmod +x "$agent"
 
 capture_for() { printf '%s/%s%s.capture.jsonl' "$out" "$1" "${plain:+.plain}"; }
+pid_for() { printf '%s/%s.pid' "$ctl" "$1"; }
 # wrapped runs the session in a directory of its own. The adapter looks for the
 # transcript of the session it is wrapping under the working directory, and a
 # checkout that has been worked in with the real agent has transcripts there:
@@ -81,12 +82,15 @@ capture_for() { printf '%s/%s%s.capture.jsonl' "$out" "$1" "${plain:+.plain}"; }
 # the host. Diple is exec'd, as a shell execs the agent a user types, so the
 # pane's process is the agent's persona and not a shell left waiting on it:
 # macOS tmux names a pane after its process group's leader, and a bash that
-# runs this line without exec'ing is that leader.
+# runs this line without exec'ing is that leader. The shell writes its pid just
+# before it execs: exec keeps the pid through Diple and through the persona Diple
+# re-executes itself as, so it is the session's pid whatever argv the pane shows.
 wrapped() {
 	local fmt='cd %s && export PATH=%s:$PATH DIPLE_FAKE_AGENT_SECONDS=%s'
-	fmt+=' && exec %s --record %s %s claude'
+	fmt+=' && echo $$ >%s && exec %s --record %s %s claude'
 	printf "$fmt" \
-		"$ctl" "$agent_dir" "${DIPLE_FAKE_AGENT_SECONDS:-25}" "$diple" "$(capture_for "$1")" "$plain"
+		"$ctl" "$agent_dir" "${DIPLE_FAKE_AGENT_SECONDS:-25}" "$(pid_for "$1")" \
+		"$diple" "$(capture_for "$1")" "$plain"
 }
 
 # The gesture handed to a driven host, in the order R-005 and R-015 ask for.
@@ -183,17 +187,25 @@ host_pid() {
 # wait_for_settled holds until the session that is writing the capture has
 # exited. Waiting for the file to stop growing is not enough: a gesture is over
 # well before the session is, and the recorder still has its last bytes to
-# write when it closes.
+# write when it closes. The session is known by the pid its shell wrote, never
+# by its arguments: Diple re-executes itself through the agent's persona, whose
+# argv names only the agent, so a match on `--record` found nothing and let the
+# check read a capture still being written. It returns 1 when the session is
+# still running as the wait gives up, and 2 when no pid was written.
 wait_for_settled() {
-	local file="$1" tries=0
-	while [ "$tries" -lt 120 ]; do
-		if ! ps -eo args | grep -q "[-]-record $file"; then
-			return 0
-		fi
+	local pid tries=0
+	pid="$(cat "$1" 2>/dev/null)"
+	[ -n "$pid" ] || return 2
+	# ps rather than kill -0: a session that has exited but not yet been
+	# reaped by its host is a zombie, and kill -0 still succeeds on it.
+	while :; do
+		case "$(ps -o stat= -p "$pid" 2>/dev/null)" in
+		'' | Z*) return 0 ;;
+		esac
+		[ "$tries" -lt 120 ] || return 1
 		sleep 1
 		tries=$((tries + 1))
 	done
-	return 0
 }
 
 wait_for_capture() {
@@ -230,7 +242,7 @@ host_identity() {
 start_host() {
 	local host="$1" cmd launcher pane bundle
 	cmd="$(wrapped "$host")"
-	rm -f "$(capture_for "$host")"
+	rm -f "$(capture_for "$host")" "$(pid_for "$host")"
 	# A launcher script, so a host that only knows how to open a file can
 	# still start a wrapped session.
 	# A stable path, not one under the run's temporary directory: a host that
@@ -391,7 +403,19 @@ for host in "${hosts[@]}"; do
 		status=1
 		continue
 	fi
-	wait_for_settled "$file"
+	wait_for_settled "$(pid_for "$host")"
+	case "$?" in
+	1)
+		echo "FAIL $host: the session was still writing its capture after 120 seconds"
+		status=1
+		continue
+		;;
+	2)
+		echo "FAIL $host: the session wrote no pid, so its end could not be awaited"
+		status=1
+		continue
+		;;
+	esac
 	case "$host" in
 	tmux | herdr)
 		# A host that names the pane must have said what it calls it.
