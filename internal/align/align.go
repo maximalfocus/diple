@@ -18,6 +18,9 @@ import (
 type Rules struct {
 	// TurnMarker begins a row where an assistant turn starts.
 	TurnMarker string
+	// OtherTurnMarkers are the other glyphs the CLI begins a turn with, where
+	// it draws one differently from its fixtures.
+	OtherTurnMarkers []string
 	// PromptMarker begins a row where the user's own prompt is echoed; it
 	// ends the region a turn may occupy.
 	PromptMarker string
@@ -31,6 +34,23 @@ type Rules struct {
 	// prints the fence itself, as pi does. Those rows belong to no block,
 	// so matching steps over them.
 	Fence string
+}
+
+// Marker returns the turn marker row begins with, or "" when it begins with
+// none, or the CLI marks no turns.
+func (r Rules) Marker(row string) string {
+	if r.TurnMarker == "" {
+		return ""
+	}
+	if strings.HasPrefix(row, r.TurnMarker) {
+		return r.TurnMarker
+	}
+	for _, m := range r.OtherTurnMarkers {
+		if m != "" && strings.HasPrefix(row, m) {
+			return m
+		}
+	}
+	return ""
 }
 
 // Span is a block's first and last row index.
@@ -353,9 +373,8 @@ func Paragraphs(rows []string, from, to int, rules Rules) []Span {
 // marker, a fence, or a list marker — and the column its text starts at, which
 // the rows continuing that paragraph are indented to at least.
 func opening(row string, rules Rules) (bool, int) {
-	if rules.TurnMarker != "" && strings.HasPrefix(row, rules.TurnMarker) {
-		rest := row[len(rules.TurnMarker):]
-		return true, utf8.RuneCountInString(rules.TurnMarker) + indent(rest)
+	if m := rules.Marker(row); m != "" {
+		return true, utf8.RuneCountInString(m) + indent(row[len(m):])
 	}
 	lead := indent(row)
 	s := row[lead:]

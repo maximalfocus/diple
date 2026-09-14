@@ -190,6 +190,23 @@ func TestBlocksLoseOnlyTheUnmatchedBlock(t *testing.T) {
 	}
 }
 
+func TestAnotherTurnMarkerBeginsATurn(t *testing.T) {
+	r := Rules{TurnMarker: "⏺", OtherTurnMarkers: []string{"●"}, PromptMarker: "❯"}
+	for row, want := range map[string]string{"⏺ Plan": "⏺", "● Plan": "●", "  Plan": "", "❯ x": ""} {
+		if got := r.Marker(row); got != want {
+			t.Fatalf("Marker(%q) = %q, want %q", row, got, want)
+		}
+	}
+	if (Rules{}).Marker("⏺ Plan") != "" {
+		t.Fatal("a CLI that marks no turns has no marker")
+	}
+	rows := []string{"● 1. Read the config", "  2. Change the handler", "     - keep the old route"}
+	want := []Span{{0, 0}, {1, 1}, {2, 2}}
+	if got := Paragraphs(rows, 0, len(rows), r); !sameSpans(got, want) {
+		t.Fatalf("paragraphs = %+v, want %+v", got, want)
+	}
+}
+
 func TestBlocksStopAtThePrompt(t *testing.T) {
 	bs := blocks.Parse("First.\n\nNever drawn.\n\nAfter the prompt.")
 	rows := []string{"⏺ First.", "", "❯ After the prompt."}

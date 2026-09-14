@@ -156,7 +156,8 @@ func candidateRegions(rows []string, rules align.Rules) []region {
 func Paragraphs(rows []string, from, to int, rules align.Rules) []AlignedBlock {
 	var out []AlignedBlock
 	for _, sp := range align.Paragraphs(rows, from, to, rules) {
-		text := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rows[sp.First]), rules.TurnMarker))
+		first := strings.TrimSpace(rows[sp.First])
+		text := strings.TrimSpace(strings.TrimPrefix(first, rules.Marker(first)))
 		for i := sp.First + 1; i <= sp.Last; i++ {
 			text += " " + strings.TrimSpace(rows[i])
 		}
@@ -261,7 +262,7 @@ type region struct{ first, last int }
 func markerRegions(rows []string, rules align.Rules) []region {
 	var out []region
 	for i := 0; i < len(rows); i++ {
-		if !strings.HasPrefix(rows[i], rules.TurnMarker) {
+		if rules.Marker(rows[i]) == "" {
 			continue
 		}
 		to := regionEnd(rows, i+1, rules)
@@ -276,7 +277,7 @@ func regionEnd(rows []string, from int, rules align.Rules) int {
 		if rules.PromptMarker != "" && strings.HasPrefix(rows[i], rules.PromptMarker) {
 			return i
 		}
-		if strings.HasPrefix(rows[i], rules.TurnMarker) {
+		if rules.Marker(rows[i]) != "" {
 			return i
 		}
 	}

@@ -22,14 +22,20 @@ import (
 // Verified lists the Claude Code versions the fixtures under testdata pin.
 var Verified = []string{"2.1.266", "2.1.268"}
 
-// Decoration facts of Claude Code's renderer.
+// Decoration facts of Claude Code's renderer. The recorded fixtures begin a
+// turn with ⏺; Claude Code 2.1.270 on Linux begins one with ● instead.
 const (
 	TurnMarker   = "⏺"
 	PromptMarker = "❯"
 	ResultMarker = "⎿"
 )
 
-var rules = align.Rules{TurnMarker: TurnMarker, PromptMarker: PromptMarker, ResultMarker: ResultMarker}
+var rules = align.Rules{
+	TurnMarker:       TurnMarker,
+	OtherTurnMarkers: []string{"●"},
+	PromptMarker:     PromptMarker,
+	ResultMarker:     ResultMarker,
+}
 
 // Adapter implements adapter.Adapter for Claude Code.
 type Adapter struct {

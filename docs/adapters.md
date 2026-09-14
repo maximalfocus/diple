@@ -58,6 +58,9 @@ to candidate rows in order and steps past the rows each match occupies. Your
 
 - `TurnMarker` — what a turn's first row starts with; leave empty when the CLI
   marks nothing and every paragraph start becomes a candidate.
+- `OtherTurnMarkers` — other glyphs the CLI begins a turn with, where it draws
+  one differently from its fixtures: Claude Code 2.1.270 on Linux draws `●`
+  where the recorded sessions show `⏺`.
 - `PromptMarker` — what the user's echoed prompt or the input box starts with;
   it ends the region a turn may occupy.
 - `Fence` — the fence a renderer prints around a code block, when it prints one

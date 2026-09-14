@@ -223,6 +223,36 @@ var modes = []struct {
 	offset int
 }{{"inline", 21}, {"fullscreen", 3}}
 
+// TestTheGlyphClaudeCodeDrawsOnLinuxMarksATurn: Claude Code 2.1.270 on Linux
+// begins a turn with ● where the fixtures show ⏺, and a turn drawn that way
+// aligns, and falls back, the same.
+//
+// Covers S-016 T-03.
+func TestTheGlyphClaudeCodeDrawsOnLinuxMarksATurn(t *testing.T) {
+	a := &Adapter{}
+	for _, c := range modes {
+		_, rows, tr := loadFixture(t, c.mode)
+		linux := make([]string, len(rows))
+		for i, r := range rows {
+			linux[i] = strings.Replace(r, TurnMarker, "●", 1)
+		}
+		al := a.Align(tr, linux)
+		if len(al) != 1 || !al[0].Aligned || len(al[0].Blocks) != len(expected(0)) {
+			t.Fatalf("%s: alignment = %+v", c.mode, al)
+		}
+		if b := al[0].Blocks[0]; b.First != c.offset || b.Text != "Plan" {
+			t.Fatalf("%s: first block = %+v", c.mode, b)
+		}
+		fb := a.Fallback(linux)
+		if len(fb) != 1 || len(fb[0].Blocks) == 0 {
+			t.Fatalf("%s: fallback = %+v", c.mode, fb)
+		}
+		if b := fb[0].Blocks[0]; b.First != c.offset || b.Text != "Plan" {
+			t.Fatalf("%s: first fallback block = %+v", c.mode, b)
+		}
+	}
+}
+
 // TestFallbackGivesEachListItemItsOwnBlock: with no transcript to align, or one
 // that no longer matches, each item of the fixture's tight, nested list is a
 // block of its own.
