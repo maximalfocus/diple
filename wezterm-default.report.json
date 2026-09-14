@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "sha": "3267718f4726c35ea9f54eba679b10f53e4a47fb",
+  "host": "wezterm",
+  "version": "20240203-110809-5046fc22",
+  "mode": "default",
+  "machine": "Linux 7.0.0-31-generic x86_64",
+  "capture": "wezterm-default.capture.jsonl",
+  "digest": "sha256:20658af8cba807dfedd30efc44fcb9a236131dcc392721dd9c72070f51ec5966",
+  "result": "PASS",
+  "created": "2026-09-14T12:37:38.656662583Z"
+}
