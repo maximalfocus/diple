@@ -110,6 +110,9 @@ func blockForCopy(lines []screen.Line, al []adapter.TurnAlignment, r int) *copyB
 			}
 			cb := &copyBlock{first: b.First, last: b.Last, left: -1, breaks: map[int]bool{}}
 			for x := b.First; x <= b.Last && x < len(lines); x++ {
+				if x > 0 && lines[x-1].Wrapped {
+					continue // a soft wrap's continuation starts at the edge
+				}
 				if l := lines[x]; strings.TrimSpace(l.String()) != "" {
 					if in := indentCells(l); cb.left < 0 || in < cb.left {
 						cb.left = in
@@ -198,8 +201,9 @@ func (s *Session) copiedText(lines []screen.Line, al []adapter.TurnAlignment,
 		default:
 			b.WriteByte('\n')
 		}
-		// The renderer's indent left of an aligned block is not the text.
-		if cb != nil && !joined && lo < cb.left {
+		// The renderer's indent left of an aligned block is not the text; a
+		// soft wrap's continuation has none.
+		if cb != nil && !joined && !(r > 0 && lines[r-1].Wrapped) && lo < cb.left {
 			lo = cb.left
 		}
 		text := ""

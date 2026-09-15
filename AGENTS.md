@@ -236,7 +236,7 @@ live runs in every host, carried through `refs/evidence/` and verified by
 and `internal/acceptance` enforces that and the case lists under
 `docs/acceptance/`.
 
-`scripts/verify-hosts.sh [--plain] [--manual] [--evidence <dir>] [--baseline] [host…]`
+`scripts/verify-hosts.sh [--plain] [--manual] [--evidence <dir>] [--baseline] [--copy] [host…]`
 records a wrapped session in each host the portability list names,
 hands the gesture to the hosts R-014 calls driven, and runs
 `internal/hostcheck` over the capture — the envelope asked for and given back,
@@ -248,6 +248,15 @@ for the person at the keyboard to make the gesture, which is how a
 pass-through host is shown to deliver it. It is not part of CI, because it
 needs those terminals installed; `RELEASE.md` records the result with the
 version each host was verified at.
+
+`--copy` is the copy check instead. A canned agent writes a transcript and
+draws a reply holding every case R-015 names — a list item with emphasis,
+inline code and a link, wide and combined characters, an agent wrap and a
+terminal wrap, a hard break, unaligned output — and each copy action is made on
+it in turn: drag, double- and triple-press, the strip's `copy`, and `c`. Before
+each, the clipboard is set to a sentinel; after, it is read back and must hold
+exactly what the selection shows. A pass-through host gets each step from the
+person at the keyboard.
 
 `internal/hostcheck` owns the class table: WezTerm, kitty, `tmux`, and `herdr`
 are driven, and every other host is pass-through only. The distinction is the

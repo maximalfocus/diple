@@ -208,6 +208,14 @@ func TestRowsJoinWhereALogicalLineWrapped(t *testing.T) {
 	if got, want := dragCopy(t, s, term, w, 0, w+1, 79), strings.TrimRight(cmd, " "); got != want {
 		t.Fatalf("a soft wrap copied\n %q\nwant\n %q", got, want)
 	}
+	// A soft wrap inside an aligned block: the continuation keeps every cell,
+	// and the renderer's indent before the first row still drops.
+	code := strings.TrimRight("echo "+strings.Repeat("a  b ", 20), " ")
+	c, cterm := copySession(t, "Run:\n\n```sh\n"+code+"\n```", "⏺ Run:", "", "  "+code)
+	cr := rowOf(t, c, "echo ")
+	if got := dragCopy(t, c, cterm, cr, 0, cr+1, 79); got != code {
+		t.Fatalf("a soft wrap in an aligned block copied\n %q\nwant\n %q", got, code)
+	}
 	output(t, s, "  ran a tool\r\n  and printed this\r\n")
 	tool := rowOf(t, s, "ran a tool")
 	if got := dragCopy(t, s, term, tool, 0, tool+1, 79); got != "  ran a tool\n  and printed this" {
