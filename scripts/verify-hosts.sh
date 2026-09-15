@@ -311,12 +311,28 @@ start_host() {
 		# A window from `wezterm start --always-new-process` is not in the
 		# mux `wezterm cli` talks to, and `send-text` needs an explicit
 		# --pane-id: without one it writes to whichever pane is focused, so
-		# the gesture went anywhere but the wrapped session.
-		wezterm cli list >/dev/null 2>&1 || {
-			wezterm start -- sh -c 'sleep 120' >/dev/null 2>&1 &
+		# the gesture went anywhere but the wrapped session. The run starts
+		# a GUI instance of its own, under a class of its own, and never lets
+		# the CLI start a background mux instead: a window spawned in a
+		# headless mux is drawn by no WezTerm at all, and an OSC 52 written
+		# there reaches no clipboard.
+		if [ ! -s "$ctl/wezterm.gui" ]; then
+			wezterm start --class "$(wez_class)" -- sh -c 'sleep 600' >/dev/null 2>&1 &
+			printf '%s\n' "$!" >"$ctl/wezterm.gui"
 			sleep 5
-		}
-		pane="$(wezterm cli spawn --new-window --pane-id 0 -- sh -c "$cmd" 2>/dev/null)" || return 4
+			# WezTerm 20240203's Wayland front end dies at once on current
+			# GNOME, where XWayland is the front end it can run. The run says
+			# which it drew through rather than failing a host a user can use.
+			if ! kill -0 "$(cat "$ctl/wezterm.gui")" 2>/dev/null && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+				echo "note wezterm: its Wayland front end exited; drawing it through XWayland" >&2
+				printf 'diple-verify-%s-x11' "${ctl##*.}" >"$ctl/wezterm.class"
+				env -u WAYLAND_DISPLAY wezterm start --class "$(wez_class)" -- sh -c 'sleep 600' \
+					>/dev/null 2>&1 &
+				printf '%s\n' "$!" >"$ctl/wezterm.gui"
+				sleep 5
+			fi
+		fi
+		pane="$(wez spawn --new-window --pane-id 0 -- sh -c "$cmd" 2>/dev/null)" || return 4
 		[ -n "$pane" ] || return 4
 		printf '%s\n' "$pane" >"$ctl/wezterm.pane"
 		sleep 4
@@ -365,6 +381,25 @@ start_host() {
 	esac
 }
 
+# wez talks to the run's own WezTerm GUI instance, and to nothing else. The
+# class names that instance; a retry through XWayland takes a class of its own,
+# since a front end that died leaves its socket behind under the first.
+wez_class() {
+	if [ -s "$ctl/wezterm.class" ]; then
+		cat "$ctl/wezterm.class"
+	else
+		printf 'diple-verify-%s' "${ctl##*.}"
+	fi
+}
+# The CLI finds a GUI instance by the display it was started on, so an
+# instance drawn through XWayland is reached with WAYLAND_DISPLAY unset too.
+wez() {
+	case "$(wez_class)" in
+	*-x11) env -u WAYLAND_DISPLAY wezterm cli --no-auto-start --class "$(wez_class)" "$@" ;;
+	*) wezterm cli --no-auto-start --class "$(wez_class)" "$@" ;;
+	esac
+}
+
 # host_send types one piece of input into the wrapped session of a driven
 # host, through the host's own control interface.
 host_send() {
@@ -378,8 +413,7 @@ host_send() {
 		fi
 		;;
 	wezterm)
-		printf '%s' "$2" |
-			wezterm cli send-text --no-paste --pane-id "$(cat "$ctl/wezterm.pane")" >/dev/null 2>&1
+		printf '%s' "$2" | wez send-text --no-paste --pane-id "$(cat "$ctl/wezterm.pane")" >/dev/null 2>&1
 		;;
 	kitty) kitty @ --to "unix:$ctl/kitty.sock" send-text -- "$2" >/dev/null 2>&1 ;;
 	*) return 1 ;;
@@ -487,10 +521,12 @@ copy_check() {
 		"$(m_press 6 "$item1")" "$(m_drag "$w" "$item1")" "$(m_release "$w" "$item1")"
 	copy_step turn-marker marker "drag across 'Copy check' from the left edge, over the marker" \
 		"$(m_press 1 "$marker")" "$(m_drag "$w" "$marker")" "$(m_release "$w" "$marker")"
+	# The presses of a double- or triple-press go as one piece: a host's CLI
+	# can take longer to start than the window that makes them one gesture.
 	copy_step double-press word "double-click the word 'bold'" \
-		"$(m_click 11 "$item1")" "$(m_click 11 "$item1")"
+		"$(m_click 11 "$item1")$(m_click 11 "$item1")"
 	copy_step triple-press item2 "triple-click the row '2. See the docs first'" \
-		"$(m_click 8 "$item2")" "$(m_click 8 "$item2")" "$(m_click 8 "$item2")"
+		"$(m_click 8 "$item2")$(m_click 8 "$item2")$(m_click 8 "$item2")"
 	copy_step strip-copy item3 "rest on item 3 until it lifts, then click copy on its strip" \
 		"$(m_rest 8 "$item3")" pause "$(m_click 18 "$strip")"
 	copy_step c-key cjk "rest the pointer on the row '漢字 café' until it lifts, then press c" \
@@ -517,6 +553,9 @@ cleanup_hosts() {
 	fi
 	if [ -s "$ctl/herdr.pane" ]; then
 		herdr pane close "$(cat "$ctl/herdr.pane")" >/dev/null 2>&1
+	fi
+	if [ -s "$ctl/wezterm.gui" ]; then
+		kill "$(cat "$ctl/wezterm.gui")" >/dev/null 2>&1
 	fi
 }
 
