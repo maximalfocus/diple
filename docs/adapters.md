@@ -17,11 +17,14 @@ meet.
 **`Name() string`** — the CLI's executable name. It is also the shim's name and
 the key in the registry.
 
-**`VerifiedVersions() []string`** — the versions your fixtures pin. Parsing a
-transcript from another version fails loudly with `adapter.VersionError`, which
-is what keeps a silently changed renderer from producing wrong anchors. If the
-CLI records no version, pin what it does record — `pi` pins its session format
-version — and say so in the package comment.
+**`VerifiedVersions() []string`** — the versions your fixtures pin. A transcript
+from another version is still parsed and aligned, because a CLI updates itself
+past its pinned versions: `Parse` marks it `Unverified`, `diple blocks` labels
+it, and the block-by-block fallback keeps whatever no longer matches from
+taking its neighbours down. Only a fixture refuses one:
+`adapter.RequireVerified` fails with `adapter.VersionError`, naming the
+version. If the CLI records no version, pin what it does record — `pi` pins its
+session format version — and say so in the package comment.
 
 **`Bypass(args []string) bool`** — the invocation forms that must run the real
 CLI with no wrapper: `--version`, `--help`, print modes, and the CLI's own
@@ -55,6 +58,9 @@ to candidate rows in order and steps past the rows each match occupies. Your
 
 - `TurnMarker` — what a turn's first row starts with; leave empty when the CLI
   marks nothing and every paragraph start becomes a candidate.
+- `OtherTurnMarkers` — other glyphs the CLI begins a turn with, where it draws
+  one differently from its fixtures: Claude Code 2.1.270 on Linux draws `●`
+  where the recorded sessions show `⏺`.
 - `PromptMarker` — what the user's echoed prompt or the input box starts with;
   it ends the region a turn may occupy.
 - `Fence` — the fence a renderer prints around a code block, when it prints one
@@ -65,7 +71,12 @@ to candidate rows in order and steps past the rows each match occupies. Your
 **`Fallback(rows []string) []adapter.TurnAlignment`** — what to offer when there
 is no transcript at all: `adapter.Paragraphed(rows, rules)`. Annotation must
 keep working at paragraph granularity; this is the promise that makes a missing
-or unreadable transcript a degradation rather than a failure.
+or unreadable transcript a degradation rather than a failure. A paragraph ends
+at a row without letters or digits, and before a row that begins with a list
+marker, a fence or a turn marker, or that is indented less than the
+paragraph's text, so each item of a tight list is a block of its own. The same
+paragraphs stand in for any block of an aligned turn that fails to match, and
+the blocks around it keep their rows.
 
 **`InputRow(screenRows []string) int`** — where the native input box begins, or
 `-1` when it is not on screen. Diple inserts the tray directly above it.
@@ -100,7 +111,8 @@ A fixture is a real session, not a mock:
 ## Tests an adapter owes
 
 - Every block of the recorded reply aligns to its exact first and last row.
-- A transcript from another version is refused, naming it.
+- A transcript from another version parses and aligns, marked unverified, and a
+  fixture from it is refused, naming the version.
 - A corrupt transcript still yields paragraph blocks.
 - The input row, the busy state, and the prompt state are read correctly from
   the recording, and a busy screen is not mistaken for a prompt.

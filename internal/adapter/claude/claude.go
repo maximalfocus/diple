@@ -22,14 +22,20 @@ import (
 // Verified lists the Claude Code versions the fixtures under testdata pin.
 var Verified = []string{"2.1.266", "2.1.268"}
 
-// Decoration facts of Claude Code's renderer.
+// Decoration facts of Claude Code's renderer. The recorded fixtures begin a
+// turn with ⏺; Claude Code 2.1.270 on Linux begins one with ● instead.
 const (
 	TurnMarker   = "⏺"
 	PromptMarker = "❯"
 	ResultMarker = "⎿"
 )
 
-var rules = align.Rules{TurnMarker: TurnMarker, PromptMarker: PromptMarker, ResultMarker: ResultMarker}
+var rules = align.Rules{
+	TurnMarker:       TurnMarker,
+	OtherTurnMarkers: []string{"●"},
+	PromptMarker:     PromptMarker,
+	ResultMarker:     ResultMarker,
+}
 
 // Adapter implements adapter.Adapter for Claude Code.
 type Adapter struct {
@@ -168,7 +174,6 @@ func (a *Adapter) Parse(r io.Reader) (*adapter.Transcript, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 256<<20)
 	t := &adapter.Transcript{Agent: a.Name()}
-	verified := false
 	line := 0
 	for sc.Scan() {
 		line++
@@ -182,13 +187,11 @@ func (a *Adapter) Parse(r io.Reader) (*adapter.Transcript, error) {
 		}
 		if e.Version != "" && t.Version == "" {
 			t.Version = e.Version
+			t.Unverified = true
 			for _, v := range Verified {
 				if v == e.Version {
-					verified = true
+					t.Unverified = false
 				}
-			}
-			if !verified {
-				return nil, &adapter.VersionError{Agent: a.Name(), Version: e.Version, Verified: a.VerifiedVersions()}
 			}
 		}
 		if e.SessionID != "" && t.SessionID == "" {

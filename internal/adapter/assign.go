@@ -39,6 +39,7 @@ func Assign(t *Transcript, rows []string, rules align.Rules) []TurnAlignment {
 			break
 		}
 	}
+	parts := make([]*partialMatch, len(t.Turns))
 	for ti := range t.Turns {
 		if claimed[ti] >= 0 {
 			continue
@@ -56,10 +57,29 @@ func Assign(t *Transcript, rows []string, rules align.Rules) []TurnAlignment {
 				break
 			}
 		}
-		for r := lo; r < hi; r++ {
+		// A turn not all of whose blocks match may still match some. The
+		// first unclaimed region in its place where any block does is its
+		// own, and only the blocks that failed give up their rows. An agent
+		// that marks nothing offers every paragraph as a region, so there
+		// the turn's first block must be among those that match.
+		end := len(rows)
+		if hi < len(regions) {
+			end = regions[hi].first
+		}
+		bs := t.Turns[ti].Blocks
+		for r := lo; r < hi && claimed[ti] < 0; r++ {
+			if claimedRegion(claimed, r) {
+				continue
+			}
+			last := min(regions[r].last, end)
+			s, m := align.Blocks(bs, rows, regions[r].first, last, rules)
+			if anyMatched(bs, m) && (rules.TurnMarker != "" || firstMatched(bs, m)) {
+				claimed[ti], parts[ti] = r, &partialMatch{spans: s, matched: m, last: last}
+			}
+		}
+		for r := lo; r < hi && claimed[ti] < 0; r++ {
 			if !claimedRegion(claimed, r) {
 				claimed[ti] = r
-				break
 			}
 		}
 	}
@@ -68,13 +88,17 @@ func Assign(t *Transcript, rows []string, rules align.Rules) []TurnAlignment {
 		if turn.Echo {
 			continue // the user's own text holds its place and nothing more
 		}
-		ta := TurnAlignment{Turn: turn.Ordinal, Aligned: spansOf[ti] != nil}
+		ta := TurnAlignment{Turn: turn.Ordinal, Aligned: spansOf[ti] != nil || parts[ti] != nil}
 		switch {
-		case ta.Aligned:
+		case spansOf[ti] != nil:
 			for i, b := range turn.Blocks {
 				ta.Blocks = append(ta.Blocks, AlignedBlock{Block: b,
 					Span: Span{First: spansOf[ti][i].First, Last: spansOf[ti][i].Last}})
 			}
+		case parts[ti] != nil:
+			p := parts[ti]
+			r := regions[claimed[ti]]
+			ta.Blocks = partial(turn.Blocks, p.spans, p.matched, rows, r.first, p.last, rules)
 		case claimed[ti] >= 0:
 			r := regions[claimed[ti]]
 			ta.Blocks = Paragraphs(rows, r.first, r.last, rules)
@@ -131,8 +155,9 @@ func candidateRegions(rows []string, rules align.Rules) []region {
 // turn marker trimmed off the first row.
 func Paragraphs(rows []string, from, to int, rules align.Rules) []AlignedBlock {
 	var out []AlignedBlock
-	for _, sp := range align.Paragraphs(rows, from, to) {
-		text := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rows[sp.First]), rules.TurnMarker))
+	for _, sp := range align.Paragraphs(rows, from, to, rules) {
+		first := strings.TrimSpace(rows[sp.First])
+		text := strings.TrimSpace(strings.TrimPrefix(first, rules.Marker(first)))
 		for i := sp.First + 1; i <= sp.Last; i++ {
 			text += " " + strings.TrimSpace(rows[i])
 		}
@@ -142,6 +167,71 @@ func Paragraphs(rows []string, from, to int, rules align.Rules) []AlignedBlock {
 		})
 	}
 	return out
+}
+
+// partialMatch is a turn only some of whose blocks matched, and the row its
+// region ends before.
+type partialMatch struct {
+	spans   []align.Span
+	matched []bool
+	last    int
+}
+
+// partial lays out a turn only some of whose blocks matched: each matched
+// block keeps its rows, and the rows of every run of unmatched blocks, between
+// the matched blocks on either side of it or between one and the edge of the
+// region, become paragraphs, in row order.
+func partial(bs []blocks.Block, spans []align.Span, matched []bool, rows []string,
+	from, to int, rules align.Rules) []AlignedBlock {
+	var out []AlignedBlock
+	at := make([]int, len(bs)) // where each block landed in out, -1 when it did not
+	next, lost := from, false
+	for i, b := range bs {
+		at[i] = -1
+		if !matched[i] {
+			lost = lost || b.Kind != blocks.CodeBlock
+			continue
+		}
+		if lost {
+			out = append(out, Paragraphs(rows, next, spans[i].First, rules)...)
+			lost = false
+		}
+		kept := b
+		if b.Parent >= 0 {
+			kept.Parent = at[b.Parent]
+		}
+		at[i] = len(out)
+		span := Span{First: spans[i].First, Last: spans[i].Last}
+		out = append(out, AlignedBlock{Block: kept, Span: span})
+		if b.Kind != blocks.CodeBlock {
+			next = spans[i].Last + 1 // a code block's lines follow it and move on
+		}
+	}
+	if lost {
+		out = append(out, Paragraphs(rows, next, to, rules)...)
+	}
+	return out
+}
+
+// anyMatched reports whether any block other than a code block's container
+// matched.
+func anyMatched(bs []blocks.Block, matched []bool) bool {
+	for i, b := range bs {
+		if matched[i] && b.Kind != blocks.CodeBlock {
+			return true
+		}
+	}
+	return false
+}
+
+// firstMatched reports whether the turn's first block matched.
+func firstMatched(bs []blocks.Block, matched []bool) bool {
+	for i, b := range bs {
+		if b.Kind != blocks.CodeBlock {
+			return matched[i]
+		}
+	}
+	return false
 }
 
 // lastRow is the final row a match occupies.
@@ -172,7 +262,7 @@ type region struct{ first, last int }
 func markerRegions(rows []string, rules align.Rules) []region {
 	var out []region
 	for i := 0; i < len(rows); i++ {
-		if !strings.HasPrefix(rows[i], rules.TurnMarker) {
+		if rules.Marker(rows[i]) == "" {
 			continue
 		}
 		to := regionEnd(rows, i+1, rules)
@@ -187,7 +277,7 @@ func regionEnd(rows []string, from int, rules align.Rules) int {
 		if rules.PromptMarker != "" && strings.HasPrefix(rows[i], rules.PromptMarker) {
 			return i
 		}
-		if strings.HasPrefix(rows[i], rules.TurnMarker) {
+		if rules.Marker(rows[i]) != "" {
 			return i
 		}
 	}

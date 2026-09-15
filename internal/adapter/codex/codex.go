@@ -219,9 +219,7 @@ func (a *Adapter) Parse(r io.Reader) (*adapter.Transcript, error) {
 		if e.Type == "session_meta" {
 			if t.Version == "" && e.Payload.CLIVersion != "" {
 				t.Version = e.Payload.CLIVersion
-				if !verified(t.Version) {
-					return nil, &adapter.VersionError{Agent: a.Name(), Version: t.Version, Verified: a.VerifiedVersions()}
-				}
+				t.Unverified = !verified(t.Version)
 			}
 			if t.SessionID == "" {
 				t.SessionID = e.Payload.SessionID

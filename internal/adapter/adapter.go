@@ -45,6 +45,11 @@ type Transcript struct {
 	Version   string
 	SessionID string
 	Turns     []Turn
+	// Unverified marks a transcript from a version the adapter's fixtures do
+	// not pin. It is parsed and aligned all the same, since a CLI updates
+	// itself past its pinned versions; the block-by-block fallback guards what
+	// no longer matches, and only a fixture refuses it.
+	Unverified bool
 }
 
 // Span is a block's first and last row, as absolute indexes into the rows
@@ -71,8 +76,9 @@ type TurnAlignment struct {
 // ErrNoTranscript means the session has not written its transcript yet.
 var ErrNoTranscript = errors.New("adapter: transcript not found yet")
 
-// VersionError reports a transcript from a CLI version the adapter was not
-// verified against. It is returned loudly rather than guessed around.
+// VersionError reports a fixture from a CLI version the adapter was not
+// verified against. A fixture is the record of what a pinned version draws,
+// so one from another version fails loudly rather than being guessed around.
 type VersionError struct {
 	Agent    string
 	Version  string
@@ -82,6 +88,15 @@ type VersionError struct {
 func (e *VersionError) Error() string {
 	return fmt.Sprintf("adapter: %s transcript is from version %s; verified versions: %s",
 		e.Agent, e.Version, strings.Join(e.Verified, ", "))
+}
+
+// RequireVerified refuses a transcript from a version a's fixtures do not pin.
+// Fixtures call it; a live session never does.
+func RequireVerified(a Adapter, t *Transcript) error {
+	if t.Unverified {
+		return &VersionError{Agent: a.Name(), Version: t.Version, Verified: a.VerifiedVersions()}
+	}
+	return nil
 }
 
 // Adapter is the per-CLI unit. Every method must be safe to call from any

@@ -22,7 +22,7 @@ import (
 
 // Verified lists the pi session formats the fixtures under testdata pin. pi
 // records no CLI version in a session file, so its own format version is
-// what an adapter can honestly pin and refuse.
+// what an adapter can honestly pin.
 var Verified = []string{"3"}
 
 // Decoration facts of pi's renderer. pi draws an assistant turn as plain
@@ -197,9 +197,7 @@ func (a *Adapter) Parse(r io.Reader) (*adapter.Transcript, error) {
 		}
 		if e.Type == "session" {
 			t.Version = strconv.Itoa(e.Version)
-			if !verified(t.Version) {
-				return nil, &adapter.VersionError{Agent: a.Name(), Version: t.Version, Verified: a.VerifiedVersions()}
-			}
+			t.Unverified = !verified(t.Version)
 			t.SessionID = e.ID
 			continue
 		}

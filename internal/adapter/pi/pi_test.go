@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -32,8 +33,13 @@ func loadFixture(t *testing.T, mode string) (*screen.Screen, []string, *adapter.
 		t.Fatal(err)
 	}
 	defer f.Close()
-	tr, err := (&Adapter{}).Parse(f)
+	a := &Adapter{}
+	tr, err := a.Parse(f)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// A fixture is the record of what a pinned format draws.
+	if err := adapter.RequireVerified(a, tr); err != nil {
 		t.Fatal(err)
 	}
 	var rows []string
@@ -66,6 +72,10 @@ var expected = []expectation{
 	{blocks.Paragraph, "That is the whole plan.", 87, 87},
 }
 
+// TestFixtureAlignsTheReplyNotTheEchoedPrompt replays the pinned fixture and
+// checks each block against the reply's rows, not the echoed prompt's.
+//
+// Covers S-016 T-05.
 func TestFixtureAlignsTheReplyNotTheEchoedPrompt(t *testing.T) {
 	a := &Adapter{}
 	s, rows, tr := loadFixture(t, "inline")
@@ -149,16 +159,34 @@ func showing(row string) *screen.Screen {
 	return s
 }
 
-func TestAnotherSessionFormatIsRefusedLoudly(t *testing.T) {
-	a := &Adapter{}
-	line := `{"type":"session","version":9,"id":"s","timestamp":"2026-09-09T13:30:47.336Z","cwd":"/tmp"}`
-	_, err := a.Parse(strings.NewReader(line + "\n"))
-	var ve *adapter.VersionError
-	if !errors.As(err, &ve) {
-		t.Fatalf("err = %v, want a version error", err)
+// TestAnUnverifiedFormatAlignsButNoFixtureTakesIt: a session file in a format
+// the fixture does not pin is parsed and aligned, marked unverified, and only a
+// fixture refuses it, naming the format.
+//
+// Covers S-016 T-03.
+func TestAnUnverifiedFormatAlignsButNoFixtureTakesIt(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", fixtureVersion, "inline.transcript.jsonl"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if ve.Version != "9" || !strings.Contains(ve.Error(), fixtureVersion) {
-		t.Fatalf("version error = %q", ve.Error())
+	session := regexp.MustCompile(`("type"\s*:\s*"session"\s*,\s*"version"\s*:\s*)3\b`)
+	other := session.ReplaceAllString(string(data), "${1}9")
+	if other == string(data) {
+		t.Fatal("the fixture's session entry was not found to change")
+	}
+	a := &Adapter{}
+	tr, err := a.Parse(strings.NewReader(other))
+	if err != nil || tr.Version != "9" || !tr.Unverified {
+		t.Fatalf("parse = %+v, %v", tr, err)
+	}
+	_, rows, _ := loadFixture(t, "inline")
+	if al := a.Align(tr, rows); len(al) != 1 || !al[0].Aligned {
+		t.Fatalf("alignment = %+v", al)
+	}
+	err = adapter.RequireVerified(a, tr)
+	var ve *adapter.VersionError
+	if !errors.As(err, &ve) || ve.Version != "9" || !strings.Contains(ve.Error(), fixtureVersion) {
+		t.Fatalf("err = %v", err)
 	}
 }
 

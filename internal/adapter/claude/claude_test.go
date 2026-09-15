@@ -42,8 +42,13 @@ func loadFixtureAt(t *testing.T, version, mode string) (*screen.Screen, []string
 		t.Fatal(err)
 	}
 	defer f.Close()
-	tr, err := (&Adapter{}).Parse(f)
+	a := &Adapter{}
+	tr, err := a.Parse(f)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// A fixture is the record of what a pinned version draws.
+	if err := adapter.RequireVerified(a, tr); err != nil {
 		t.Fatal(err)
 	}
 	return s, historyRows(s), tr
@@ -87,6 +92,10 @@ func expected(offset int) []expectation {
 	}
 }
 
+// TestFixturesAlignInBothModes replays every pinned fixture in both rendering
+// modes and checks each block against the rows read off it by hand.
+//
+// Covers S-016 T-05.
 func TestFixturesAlignInBothModes(t *testing.T) {
 	cases := []struct {
 		mode   string
@@ -178,17 +187,158 @@ func TestCorruptTranscriptFallsBackToParagraphs(t *testing.T) {
 	}
 }
 
-func TestOtherVersionFailsLoudly(t *testing.T) {
+// TestAnUnverifiedVersionAlignsButNoFixtureTakesIt: a live session at a version
+// the fixtures do not pin is parsed and aligned, marked unverified, and only a
+// fixture refuses it, naming the version.
+//
+// Covers S-016 T-03.
+func TestAnUnverifiedVersionAlignsButNoFixtureTakesIt(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", fixtureVersion, "inline.transcript.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	other := strings.ReplaceAll(string(data), fixtureVersion, "9.9.9")
-	_, err = (&Adapter{}).Parse(strings.NewReader(other))
+	a := &Adapter{}
+	tr, err := a.Parse(strings.NewReader(other))
+	if err != nil || tr.Version != "9.9.9" || !tr.Unverified {
+		t.Fatalf("parse = %+v, %v", tr, err)
+	}
+	_, rows, pinned := loadFixture(t, "inline")
+	if pinned.Unverified {
+		t.Fatal("a pinned version is marked unverified")
+	}
+	al := a.Align(tr, rows)
+	if len(al) != 1 || !al[0].Aligned || len(al[0].Blocks) != len(expected(0)) {
+		t.Fatalf("alignment = %+v", al)
+	}
+	err = adapter.RequireVerified(a, tr)
 	var ve *adapter.VersionError
 	if !errors.As(err, &ve) || ve.Version != "9.9.9" || !strings.Contains(err.Error(), "9.9.9") || !strings.Contains(err.Error(), fixtureVersion) {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+var modes = []struct {
+	mode   string
+	offset int
+}{{"inline", 21}, {"fullscreen", 3}}
+
+// TestTheGlyphClaudeCodeDrawsOnLinuxMarksATurn: Claude Code 2.1.270 on Linux
+// begins a turn with ● where the fixtures show ⏺, and a turn drawn that way
+// aligns, and falls back, the same.
+//
+// Covers S-016 T-03.
+func TestTheGlyphClaudeCodeDrawsOnLinuxMarksATurn(t *testing.T) {
+	a := &Adapter{}
+	for _, c := range modes {
+		_, rows, tr := loadFixture(t, c.mode)
+		linux := make([]string, len(rows))
+		for i, r := range rows {
+			linux[i] = strings.Replace(r, TurnMarker, "●", 1)
+		}
+		al := a.Align(tr, linux)
+		if len(al) != 1 || !al[0].Aligned || len(al[0].Blocks) != len(expected(0)) {
+			t.Fatalf("%s: alignment = %+v", c.mode, al)
+		}
+		if b := al[0].Blocks[0]; b.First != c.offset || b.Text != "Plan" {
+			t.Fatalf("%s: first block = %+v", c.mode, b)
+		}
+		fb := a.Fallback(linux)
+		if len(fb) != 1 || len(fb[0].Blocks) == 0 {
+			t.Fatalf("%s: fallback = %+v", c.mode, fb)
+		}
+		if b := fb[0].Blocks[0]; b.First != c.offset || b.Text != "Plan" {
+			t.Fatalf("%s: first fallback block = %+v", c.mode, b)
+		}
+	}
+}
+
+// TestFallbackGivesEachListItemItsOwnBlock: with no transcript to align, or one
+// that no longer matches, each item of the fixture's tight, nested list is a
+// block of its own.
+//
+// Covers S-016 T-01.
+func TestFallbackGivesEachListItemItsOwnBlock(t *testing.T) {
+	a := &Adapter{}
+	for _, c := range modes {
+		_, rows, tr := loadFixture(t, c.mode)
+		tr.Turns[0].Blocks = blocks.Parse("Something the screen never showed.")
+		cases := map[string][]adapter.TurnAlignment{
+			"missing": a.Fallback(rows),
+			"corrupt": a.Align(tr, rows),
+		}
+		for name, al := range cases {
+			var got []adapter.AlignedBlock
+			for _, turn := range al {
+				got = append(got, turn.Blocks...)
+			}
+			for _, w := range expected(c.offset) {
+				if w.kind != blocks.ListItem {
+					continue
+				}
+				if !hasSpan(got, w.first+c.offset, w.last+c.offset) {
+					t.Fatalf("%s %s: no block covers only %q (rows %d-%d): %+v",
+						c.mode, name, w.text, w.first+c.offset, w.last+c.offset, got)
+				}
+			}
+		}
+	}
+}
+
+// TestOneUnmatchedBlockKeepsTheOthers: one block the screen draws differently
+// from the transcript gives up only its own rows, to a paragraph, and every
+// other block keeps the rows it matched.
+//
+// Covers S-016 T-04.
+func TestOneUnmatchedBlockKeepsTheOthers(t *testing.T) {
+	a := &Adapter{}
+	for _, c := range modes {
+		_, rows, tr := loadFixture(t, c.mode)
+		want := expected(c.offset)
+		const lost = 3 // "keep the old route", on a row of its own
+		tr.Turns[0].Blocks[lost].Text = "keep the new route instead"
+		al := a.Align(tr, rows)
+		if len(al) != 1 || !al[0].Aligned {
+			t.Fatalf("%s: alignment = %+v", c.mode, al)
+		}
+		for i, w := range want {
+			if i == lost {
+				continue
+			}
+			if !hasKind(al[0].Blocks, w.kind, w.first+c.offset, w.last+c.offset) {
+				t.Fatalf("%s: block %d (%s %q) lost its rows: %+v", c.mode, i, w.kind, w.text, al[0].Blocks)
+			}
+		}
+		row := want[lost].first + c.offset
+		if !hasKind(al[0].Blocks, blocks.Paragraph, row, row) {
+			t.Fatalf("%s: the unmatched block's row %d is not a paragraph: %+v", c.mode, row, al[0].Blocks)
+		}
+		// A code line still names its code block.
+		for _, b := range al[0].Blocks {
+			orphan := b.Parent < 0 || al[0].Blocks[b.Parent].Kind != blocks.CodeBlock
+			if b.Kind == blocks.CodeLine && orphan {
+				t.Fatalf("%s: code line %q lost its block: parent %d", c.mode, b.Text, b.Parent)
+			}
+		}
+	}
+}
+
+func hasSpan(bs []adapter.AlignedBlock, first, last int) bool {
+	for _, b := range bs {
+		if b.First == first && b.Last == last {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKind(bs []adapter.AlignedBlock, kind blocks.Kind, first, last int) bool {
+	for _, b := range bs {
+		if b.Kind == kind && b.First == first && b.Last == last {
+			return true
+		}
+	}
+	return false
 }
 
 func TestParseGroupsByMessageAndSummarisesTools(t *testing.T) {
