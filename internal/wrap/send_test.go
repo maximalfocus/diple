@@ -31,6 +31,7 @@ func (b *busyAdapter) Parse(io.Reader) (*adapter.Transcript, error) {
 func (b *busyAdapter) Mode(*screen.Screen) adapter.Mode                            { return adapter.ModeInline }
 func (b *busyAdapter) Align(*adapter.Transcript, []string) []adapter.TurnAlignment { return nil }
 func (b *busyAdapter) Fallback([]string) []adapter.TurnAlignment                   { return nil }
+func (b *busyAdapter) Marker(string) string                                        { return "" }
 func (b *busyAdapter) InputRow([]string) int                                       { return -1 }
 func (b *busyAdapter) Busy(*screen.Screen) bool                                    { return b.busy }
 func (b *busyAdapter) Prompt(*screen.Screen) bool                                  { return b.prompt }

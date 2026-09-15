@@ -19,8 +19,9 @@ they are, and adds two things:
 
 Because Diple owns the mouse, it also gives back the selection your terminal
 stops offering: drag to select and copy, double-press for a word, triple-press
-for a line. What lands on the clipboard is the transcript's text, so a command
-that wrapped over three rows comes back as one line.
+for a line. What lands on the clipboard is what the selection shows, so a
+command that wrapped over three rows comes back as one line, and no Markdown the
+screen hides comes with it.
 
 It replaces the "screenshot, then retype a wall of text" loop with something
 closer to a pull-request review: many pinned comments, sent once. It is

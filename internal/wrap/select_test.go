@@ -10,8 +10,7 @@ import (
 )
 
 // wrappedRows is the history rows of the long list item the renderer wrapped,
-// which is the case R-015 is about: what is copied is the transcript's text
-// rather than the screen's.
+// and the item's transcript text, which carries no list marker.
 func wrappedRows(t *testing.T, s *Session) (first, last int, text string) {
 	t.Helper()
 	first = rowOf(t, s, "1. Read the config file")
@@ -25,12 +24,14 @@ func wrappedRows(t *testing.T, s *Session) (first, last int, text string) {
 	return b.First, b.Last, b.Text
 }
 
-// TestDragSelectsAcrossRowsAndCopiesTheTranscriptText is R-015's first
-// acceptance: a plain drag across two rows puts exactly that text on the
-// clipboard, and a line the renderer wrapped comes back as one line.
-func TestDragSelectsAcrossRowsAndCopiesTheTranscriptText(t *testing.T) {
+// TestDragSelectsAcrossRowsAndCopiesWhatItShows is R-015's first acceptance: a
+// plain drag across two rows puts exactly what they show on the clipboard —
+// the visible list marker included — and a line the renderer wrapped comes
+// back as one line.
+func TestDragSelectsAcrossRowsAndCopiesWhatItShows(t *testing.T) {
 	s, term, agent := fixtureSession(t, "inline")
-	first, last, want := wrappedRows(t, s)
+	first, last, text := wrappedRows(t, s)
+	want := "1. " + text
 	if last <= first {
 		t.Skipf("the fixture did not wrap this block over more than one row")
 	}

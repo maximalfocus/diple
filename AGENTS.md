@@ -103,12 +103,15 @@ on a second raised line, which extends a code or diff line range.
 Diple owns the mouse, so the host stops offering its own drag-selection. Diple
 therefore makes the selection itself: a drag selects across rows and past any
 block's edge and copies when the button comes up, a double-press takes the word
-and a triple-press the whole logical line. What is copied is the transcript's
-text where a transcript covers the rows — so a command that wrapped over three
-rows returns as one line — and the screen's own rows where none does, so
-nothing on screen is ever unselectable. `--copy-on-select=off` leaves the
-clipboard to the explicit `copy`, and `Alt+H` returns the mouse to the host
-entirely.
+and a triple-press the whole logical line. What is copied is what the selection
+shows: its highlighted cells, read by the column model that drew them, so a
+wide or combined character comes out once, Markdown the screen hides never
+travels, and a visible list marker does. Rows join where a logical line
+wrapped — a terminal soft wrap keeps its spaces, and an agent wrap inside an
+aligned block drops the renderer's continuation indent — and other rows end
+lines. No highlight covers the agent's turn marker, and no copy carries it.
+`--copy-on-select=off` leaves the clipboard to the explicit `copy`, and `Alt+H`
+returns the mouse to the host entirely.
 
 ## Cards and the tray
 

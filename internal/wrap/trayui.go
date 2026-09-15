@@ -405,13 +405,17 @@ func (s *Session) pressRaisedLocked(p *pressState) error {
 }
 
 // copyRaisedLocked copies the raised block, the raised line, or a range of
-// lines the user extended, without touching the tray.
+// lines the user extended, without touching the tray. Like every copy, it
+// carries what the highlight shows: the extended lines' rows, or the raised
+// box.
 func (s *Session) copyRaisedLocked() error {
+	lines := s.historyLinesLocked()
+	_, al := s.alignmentLocked()
 	text := ""
 	if s.sel != nil && s.sel.lines != nil && s.raised != nil && s.sel.turn == s.raised.turn {
-		text = s.sel.text
-	} else if s.raised != nil {
-		text = s.raised.text
+		text = s.copiedText(lines, al, s.sel.first, 0, s.sel.last, 1<<30)
+	} else if r := s.raised; r != nil {
+		text = s.copiedText(lines, al, r.first, r.left, r.last, r.right)
 	}
 	if text == "" {
 		return nil
