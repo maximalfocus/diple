@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "sha": "3267718f4726c35ea9f54eba679b10f53e4a47fb",
+  "host": "terminal.app",
+  "version": "2.15",
+  "mode": "plain",
+  "machine": "Darwin 25.6.0 arm64",
+  "capture": "terminal.app-plain.capture.jsonl",
+  "digest": "sha256:88180b4307748c98a3c3a25ae26a95142d8046724ce42c57fdb150e8f4903896",
+  "result": "PASS",
+  "created": "2026-09-15T01:27:23.716701Z"
+}

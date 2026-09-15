@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "sha": "3267718f4726c35ea9f54eba679b10f53e4a47fb",
+  "host": "ghostty",
+  "version": "1.3.1",
+  "mode": "plain",
+  "machine": "Darwin 25.6.0 arm64",
+  "capture": "ghostty-plain.capture.jsonl",
+  "digest": "sha256:dc0f1db7e6b966bd09f59ac09857bea5fa8218b0c35d285a231509cf8003de74",
+  "result": "PASS",
+  "created": "2026-09-15T01:29:14.745672Z"
+}

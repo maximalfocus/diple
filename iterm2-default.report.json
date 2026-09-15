@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "sha": "3267718f4726c35ea9f54eba679b10f53e4a47fb",
+  "host": "iterm2",
+  "version": "3.7.1",
+  "mode": "default",
+  "machine": "Darwin 25.6.0 arm64",
+  "capture": "iterm2-default.capture.jsonl",
+  "digest": "sha256:b417835edb9ee8f6e7b90ea5db3099403a0f9a40fac8cb34ad72071aab13ba4e",
+  "result": "PASS",
+  "created": "2026-09-15T01:24:39.975315Z"
+}
