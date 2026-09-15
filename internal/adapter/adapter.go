@@ -120,6 +120,10 @@ type Adapter interface {
 	Align(t *Transcript, rows []string) []TurnAlignment
 	// Fallback splits rows into paragraph blocks with no transcript at all.
 	Fallback(rows []string) []TurnAlignment
+	// Marker returns the turn marker a row begins with, or "" when it begins
+	// with none or the agent marks no turns. The highlight never covers it and
+	// a copy never carries it.
+	Marker(row string) string
 	// InputRow returns the index of the row where the native input box
 	// begins within the visible screen rows, or -1 when it is not shown.
 	InputRow(screenRows []string) int

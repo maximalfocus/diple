@@ -1,11 +1,8 @@
 package wrap
 
 import (
-	"strings"
-	"unicode"
-
-	"github.com/maximalfocus/diple/internal/adapter"
 	"github.com/maximalfocus/diple/internal/clip"
+	"github.com/maximalfocus/diple/internal/screen"
 )
 
 // This file is the selection Diple gives back. Diple owns the mouse, so the
@@ -43,21 +40,32 @@ func (s *Session) setTextSelectionLocked(fromRow, fromCol, toRow, toCol int) {
 }
 
 // selectWordLocked selects the word under a point, which is what a
-// double-press takes.
+// double-press takes. A word is a run of cells that are not blank, so a wide
+// character is one piece of it, both its columns.
 func (s *Session) selectWordLocked(row, col int) bool {
-	rows, _ := s.alignmentLocked()
-	if row < 0 || row >= len(rows) {
+	lines := s.historyLinesLocked()
+	if row < 0 || row >= len(lines) {
 		return false
 	}
-	line := []rune(rows[row])
-	if col >= len(line) || col < 0 || unicode.IsSpace(line[col]) {
+	cells := lines[row].Cells
+	if col < 0 || col >= len(cells) {
 		return false
+	}
+	for col > 0 && cells[col].Width == 0 {
+		col--
+	}
+	start := s.markerCells(lines[row])
+	if col < start || isSpaceCell(cells[col]) {
+		return false
+	}
+	inWord := func(x int) bool {
+		return x >= start && x < len(cells) && (cells[x].Width == 0 || !isSpaceCell(cells[x]))
 	}
 	from, to := col, col
-	for from > 0 && !unicode.IsSpace(line[from-1]) {
+	for inWord(from - 1) {
 		from--
 	}
-	for to+1 < len(line) && !unicode.IsSpace(line[to+1]) {
+	for inWord(to + 1) {
 		to++
 	}
 	s.setTextSelectionLocked(row, from, row, to)
@@ -65,119 +73,56 @@ func (s *Session) selectWordLocked(row, col int) bool {
 }
 
 // selectLogicalLineLocked selects the whole logical line under a point, which
-// is what a triple-press takes: the transcript's line where one covers the
-// row, and the screen row where none does.
+// is what a triple-press takes: the rows of the block that covers the row, and
+// the screen row where none does.
 func (s *Session) selectLogicalLineLocked(row int) bool {
 	rows, al := s.alignmentLocked()
-	if row < 0 || row >= len(rows) {
+	lines := s.historyLinesLocked()
+	if row < 0 || row >= len(rows) || row >= len(lines) {
 		return false
 	}
 	first, last := row, row
 	if b := blockOf(al, row); b != nil && b.First >= 0 {
 		first, last = b.First, b.Last
 	}
-	lastCol := 0
-	if last < len(rows) {
-		lastCol = len([]rune(rows[last]))
-		if lastCol > 0 {
-			lastCol--
-		}
+	if last >= len(lines) {
+		last = len(lines) - 1
 	}
-	s.setTextSelectionLocked(first, 0, last, lastCol)
+	s.setTextSelectionLocked(first, 0, last, lastTextCell(lines[last]))
 	return true
 }
 
-// selectionTextLocked is what the current selection puts on the clipboard.
-//
-// What is copied is the transcript's text rather than the screen's, so a
-// command that wrapped over three rows returns as one line and no decoration,
-// gutter, or wrap artefact travels with it. Where a selection has no
-// transcript behind it — tool output, a native prompt, anything Diple could
-// not align — the screen's own rows are copied instead, joined as they read,
-// so nothing on the screen is ever unselectable.
+// lastTextCell is the column of a row's last cell that is not blank, or 0.
+func lastTextCell(l screen.Line) int {
+	for x := len(l.Cells) - 1; x >= 0; x-- {
+		if c := l.Cells[x]; c.Width == 0 || !isSpaceCell(c) {
+			return x
+		}
+	}
+	return 0
+}
+
+// selectionTextLocked is what the current selection puts on the clipboard:
+// what it shows. Each kind of selection copies the cells its highlight covers
+// — a drag from its press to its release, a span its own range, a selected
+// block or line range its rows, a raised block its box — read by copiedText.
 func (s *Session) selectionTextLocked() string {
-	rows, al := s.alignmentLocked()
-	if s.textSel != nil {
+	lines := s.historyLinesLocked()
+	_, al := s.alignmentLocked()
+	switch {
+	case s.textSel != nil:
 		first, firstCol, last, lastCol := s.textSel.rows(s.dropped())
-		return selectedText(rows, al, first, firstCol, last, lastCol)
-	}
-	if s.sel != nil {
-		return s.sel.text
-	}
-	if r := s.raised; r != nil {
-		return r.text
+		return s.copiedText(lines, al, first, firstCol, last, lastCol)
+	case s.sel != nil && s.sel.span != nil:
+		sp := s.sel.span
+		return s.copiedText(lines, al, sp.Row, sp.Col, sp.EndRow, sp.EndCol)
+	case s.sel != nil:
+		return s.copiedText(lines, al, s.sel.first, 0, s.sel.last, 1<<30)
+	case s.raised != nil:
+		r := s.raised
+		return s.copiedText(lines, al, r.first, r.left, r.last, r.right)
 	}
 	return ""
-}
-
-// selectedText walks the selected rows in order. A block whose rows the
-// selection covers whole gives its transcript text, unwrapped; a partly
-// covered block, and every row no block covers, gives the screen's own
-// columns as they read.
-func selectedText(rows []string, al []adapter.TurnAlignment, first, firstCol, last, lastCol int) string {
-	if first < 0 {
-		first, firstCol = 0, 0
-	}
-	if last >= len(rows) {
-		last = len(rows) - 1
-		if last >= 0 {
-			lastCol = len([]rune(rows[last]))
-		}
-	}
-	if first > last || last < 0 {
-		return ""
-	}
-	var out []string
-	for r := first; r <= last; r++ {
-		if b := blockOf(al, r); coversWhole(rows, b, r, first, firstCol, last, lastCol) {
-			// The selection covers this block whole: its transcript text is
-			// what the user meant, however the renderer wrapped it.
-			if text := strings.TrimRight(b.Text, "\n"); text != "" {
-				out = append(out, text)
-			}
-			r = b.Last
-			continue
-		}
-		line := []rune(rows[r])
-		from, to := 0, len(line)-1
-		if r == first {
-			from = firstCol
-		}
-		if r == last {
-			to = lastCol
-		}
-		if to >= len(line) {
-			to = len(line) - 1
-		}
-		if from < 0 {
-			from = 0
-		}
-		if from > to {
-			out = append(out, "")
-			continue
-		}
-		out = append(out, strings.TrimRight(string(line[from:to+1]), " "))
-	}
-	return strings.Join(out, "\n")
-}
-
-// coversWhole reports whether the selection takes in every row of the block
-// starting at row r, with no column of its first or last row left out. Only
-// then is the transcript's own text what the user selected; a partly covered
-// block gives the screen's columns instead.
-func coversWhole(rows []string, b *adapter.AlignedBlock, r, first, firstCol, last, lastCol int) bool {
-	if b == nil || b.First < 0 || b.First != r || b.Last > last || b.Last < b.First {
-		return false
-	}
-	if b.First == first && firstCol > 0 {
-		return false
-	}
-	if b.Last == last && b.Last < len(rows) {
-		if end := len([]rune(rows[b.Last])) - 1; lastCol < end {
-			return false
-		}
-	}
-	return true
 }
 
 // copySelectionLocked puts the current selection on the clipboard through the

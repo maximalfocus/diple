@@ -3,7 +3,7 @@
 # Diple gesture into it where R-014 calls the host driven, and checks the
 # capture. Run it from the repository root:
 #
-#   scripts/verify-hosts.sh [--plain] [--manual] [--evidence <dir>] [--baseline] [host...]
+#   scripts/verify-hosts.sh [--plain] [--manual] [--evidence <dir>] [--baseline] [--copy] [host...]
 #
 # With no host arguments it does every host it can start on this machine and
 # says which ones it skipped, so the release checklist can record both. A host
@@ -14,6 +14,12 @@
 # HEAD, and each passing capture is filed in <dir> with a report binding it to
 # that commit, for `scripts/evidence.sh upload`. --baseline files each passing
 # capture under testdata/hosts/<host>/<version>/ for tier 3 to replay.
+#
+# --copy is S-017's copy check instead: a canned agent draws a reply holding
+# every case R-015 names, and each copy action is made on it in turn, the
+# clipboard read back after each and compared with the text the selection
+# shows. A host nothing can type into gets each step from the person at the
+# keyboard.
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -42,15 +48,21 @@ plain=""
 manual=""
 evidence=""
 baseline=""
+copy=""
 while :; do
 	case "${1:-}" in
 	--plain) plain="--plain"; shift ;;
 	--manual) manual="1"; shift ;;
 	--evidence) evidence="${2:?--evidence needs a directory}"; shift 2 ;;
 	--baseline) baseline="1"; shift ;;
+	--copy) copy="1"; shift ;;
 	*) break ;;
 	esac
 done
+# How long the canned agent holds the session: long enough for the gesture, or
+# for a person to make every copy the copy check asks for.
+seconds=25
+[ -z "$copy" ] || seconds=900
 mode="${plain:+plain}"
 mode="${mode:-default}"
 
@@ -69,7 +81,11 @@ fi
 
 (cd "$src" && go build -o "$diple" ./cmd/diple && go build -o "$ctl/hostcheck" ./internal/hostcheck) || exit 1
 mkdir -p "$agent_dir"
-cp "$src/scripts/fake-agent.sh" "$agent"
+if [ -n "$copy" ]; then
+	cp "$src/scripts/fake-copy-agent.sh" "$agent"
+else
+	cp "$src/scripts/fake-agent.sh" "$agent"
+fi
 chmod +x "$agent"
 
 capture_for() { printf '%s/%s%s.capture.jsonl' "$out" "$1" "${plain:+.plain}"; }
@@ -86,10 +102,16 @@ pid_for() { printf '%s/%s.pid' "$ctl" "$1"; }
 # before it execs: exec keeps the pid through Diple and through the persona Diple
 # re-executes itself as, so it is the session's pid whatever argv the pane shows.
 wrapped() {
-	local fmt='cd %s && export PATH=%s:$PATH DIPLE_FAKE_AGENT_SECONDS=%s'
+	local fmt='cd %s && export PATH=%s:$PATH DIPLE_FAKE_AGENT_SECONDS=%s%s'
 	fmt+=' && echo $$ >%s && exec %s --record %s %s claude'
+	local extra=""
+	if [ -n "$copy" ]; then
+		# The copy check's agent writes a transcript for Diple to find, into
+		# a home of the run's own, never the user's.
+		extra=" HOME=$ctl/home-$1 DIPLE_COPY_DIR=$ctl/copy-$1"
+	fi
 	printf "$fmt" \
-		"$ctl" "$agent_dir" "${DIPLE_FAKE_AGENT_SECONDS:-25}" "$(pid_for "$1")" \
+		"$ctl" "$agent_dir" "${DIPLE_FAKE_AGENT_SECONDS:-$seconds}" "$extra" "$(pid_for "$1")" \
 		"$diple" "$(capture_for "$1")" "$plain"
 }
 
@@ -261,10 +283,7 @@ start_host() {
 		tmux new-session -d -s diple-verify -x 100 -y 30 "$cmd" || return 4
 		sleep 3
 		host_identity tmux
-		for part in "${gesture_parts[@]}"; do
-			tmux send-keys -t diple-verify -l -- "$part" || return 4
-			sleep 1
-		done
+		drive tmux || return 4
 		;;
 	herdr)
 		command -v herdr >/dev/null || return 3
@@ -279,18 +298,12 @@ start_host() {
 			herdr pane run "$pane" "$cmd" >/dev/null 2>&1 || return 4
 			sleep 4
 			host_identity herdr "$pane"
-			for part in "${gesture_parts[@]}"; do
-				herdr pane send-text "$pane" "$part" >/dev/null 2>&1 || return 4
-				sleep 1
-			done
+			drive herdr || return 4
 		else
 			herdr agent start diple-verify --cwd "$root" --no-focus -- sh -c "$cmd" >/dev/null 2>&1 || return 4
 			sleep 4
 			host_identity herdr
-			for part in "${gesture_parts[@]}"; do
-				herdr agent send diple-verify "$part" >/dev/null 2>&1 || return 4
-				sleep 1
-			done
+			drive herdr || return 4
 		fi
 		;;
 	wezterm)
@@ -298,28 +311,39 @@ start_host() {
 		# A window from `wezterm start --always-new-process` is not in the
 		# mux `wezterm cli` talks to, and `send-text` needs an explicit
 		# --pane-id: without one it writes to whichever pane is focused, so
-		# the gesture went anywhere but the wrapped session.
-		wezterm cli list >/dev/null 2>&1 || {
-			wezterm start -- sh -c 'sleep 120' >/dev/null 2>&1 &
+		# the gesture went anywhere but the wrapped session. The run starts
+		# a GUI instance of its own, under a class of its own, and never lets
+		# the CLI start a background mux instead: a window spawned in a
+		# headless mux is drawn by no WezTerm at all, and an OSC 52 written
+		# there reaches no clipboard.
+		if [ ! -s "$ctl/wezterm.gui" ]; then
+			wezterm start --class "$(wez_class)" -- sh -c 'sleep 600' >/dev/null 2>&1 &
+			printf '%s\n' "$!" >"$ctl/wezterm.gui"
 			sleep 5
-		}
-		pane="$(wezterm cli spawn --new-window --pane-id 0 -- sh -c "$cmd" 2>/dev/null)" || return 4
+			# WezTerm 20240203's Wayland front end dies at once on current
+			# GNOME, where XWayland is the front end it can run. The run says
+			# which it drew through rather than failing a host a user can use.
+			if ! kill -0 "$(cat "$ctl/wezterm.gui")" 2>/dev/null && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+				echo "note wezterm: its Wayland front end exited; drawing it through XWayland" >&2
+				printf 'diple-verify-%s-x11' "${ctl##*.}" >"$ctl/wezterm.class"
+				env -u WAYLAND_DISPLAY wezterm start --class "$(wez_class)" -- sh -c 'sleep 600' \
+					>/dev/null 2>&1 &
+				printf '%s\n' "$!" >"$ctl/wezterm.gui"
+				sleep 5
+			fi
+		fi
+		pane="$(wez spawn --new-window --pane-id 0 -- sh -c "$cmd" 2>/dev/null)" || return 4
 		[ -n "$pane" ] || return 4
+		printf '%s\n' "$pane" >"$ctl/wezterm.pane"
 		sleep 4
-		for part in "${gesture_parts[@]}"; do
-			printf '%s' "$part" | wezterm cli send-text --no-paste --pane-id "$pane" >/dev/null 2>&1 || return 4
-			sleep 1
-		done
+		drive wezterm || return 4
 		;;
 	kitty)
 		command -v kitty >/dev/null || return 3
 		kitty -o allow_remote_control=yes --listen-on "unix:$ctl/kitty.sock" --detach sh -c "$cmd" || return 4
 		sleep 5
 		[ -S "$ctl/kitty.sock" ] || return 4
-		for part in "${gesture_parts[@]}"; do
-			kitty @ --to "unix:$ctl/kitty.sock" send-text -- "$part" >/dev/null 2>&1 || return 4
-			sleep 1
-		done
+		drive kitty || return 4
 		;;
 	ghostty)
 		# Ghostty offers no way to type into a running window from outside,
@@ -357,6 +381,169 @@ start_host() {
 	esac
 }
 
+# wez talks to the run's own WezTerm GUI instance, and to nothing else. The
+# class names that instance; a retry through XWayland takes a class of its own,
+# since a front end that died leaves its socket behind under the first.
+wez_class() {
+	if [ -s "$ctl/wezterm.class" ]; then
+		cat "$ctl/wezterm.class"
+	else
+		printf 'diple-verify-%s' "${ctl##*.}"
+	fi
+}
+# The CLI finds a GUI instance by the display it was started on, so an
+# instance drawn through XWayland is reached with WAYLAND_DISPLAY unset too.
+wez() {
+	case "$(wez_class)" in
+	*-x11) env -u WAYLAND_DISPLAY wezterm cli --no-auto-start --class "$(wez_class)" "$@" ;;
+	*) wezterm cli --no-auto-start --class "$(wez_class)" "$@" ;;
+	esac
+}
+
+# host_send types one piece of input into the wrapped session of a driven
+# host, through the host's own control interface.
+host_send() {
+	case "$1" in
+	tmux) tmux send-keys -t diple-verify -l -- "$2" ;;
+	herdr)
+		if [ -s "$ctl/herdr.pane" ]; then
+			herdr pane send-text "$(cat "$ctl/herdr.pane")" "$2" >/dev/null 2>&1
+		else
+			herdr agent send diple-verify "$2" >/dev/null 2>&1
+		fi
+		;;
+	wezterm)
+		printf '%s' "$2" | wez send-text --no-paste --pane-id "$(cat "$ctl/wezterm.pane")" >/dev/null 2>&1
+		;;
+	kitty) kitty @ --to "unix:$ctl/kitty.sock" send-text -- "$2" >/dev/null 2>&1 ;;
+	*) return 1 ;;
+	esac
+}
+
+# drive hands a driven host the gesture, one part at a time, since the dwell
+# that raises a block is real time. The copy check makes its own gestures.
+drive() {
+	[ -z "$copy" ] || return 0
+	local part
+	for part in "${gesture_parts[@]}"; do
+		host_send "$1" "$part" || return 1
+		sleep 1
+	done
+}
+
+# The clipboard the copy check reads back, and writes a sentinel to before each
+# copy so that what it reads is proved to be the copy's.
+clip_read() {
+	if command -v pbpaste >/dev/null; then
+		pbpaste
+	elif [ -n "${WAYLAND_DISPLAY:-}" ] && command -v wl-paste >/dev/null; then
+		wl-paste -n 2>/dev/null
+	elif command -v xclip >/dev/null; then
+		xclip -o -selection clipboard 2>/dev/null
+	fi
+}
+
+clip_write() {
+	if command -v pbcopy >/dev/null; then
+		printf '%s' "$1" | pbcopy
+	elif [ -n "${WAYLAND_DISPLAY:-}" ] && command -v wl-copy >/dev/null; then
+		printf '%s' "$1" | wl-copy
+	elif command -v xclip >/dev/null; then
+		printf '%s' "$1" | xclip -i -selection clipboard
+	fi
+}
+
+# SGR mouse reports at 1-based columns and rows: a press, its release, a drag
+# with the button down, and the pointer resting with none.
+m_press() { printf '\033[<0;%s;%sM' "$1" "$2"; }
+m_release() { printf '\033[<0;%s;%sm' "$1" "$2"; }
+m_drag() { printf '\033[<32;%s;%sM' "$1" "$2"; }
+m_rest() { printf '\033[<35;%s;%sM' "$1" "$2"; }
+m_click() { printf '%s%s' "$(m_press "$1" "$2")" "$(m_release "$1" "$2")"; }
+
+# copy_step makes one copy and reads it back. A driven host is typed the parts;
+# "pause" waits for a raise and "hold" for output to arrive under a drag. By
+# hand, the person gets the instruction and says when it is done.
+copy_step() {
+	local name="$1" want got part
+	want="$(cat "$copy_dir/expect-$2")"
+	local instruction="$3"
+	shift 3
+	clip_write "diple copy check sentinel"
+	if [ -n "$by_hand" ]; then
+		printf '\n  %s, %s: %s\n  Then press Enter here.\n' "$host" "$name" "$instruction" >&2
+		read -r _ </dev/tty || true
+	else
+		for part in "$@"; do
+			case "$part" in
+			pause) sleep 0.5 ;;
+			hold) sleep 5 ;;
+			*) host_send "$host" "$part"; sleep 0.05 ;;
+			esac
+		done
+	fi
+	sleep 1
+	got="$(clip_read)"
+	if [ "$got" = "$want" ]; then
+		echo "PASS $host copy $name"
+	else
+		echo "FAIL $host copy $name: got $(printf '%q' "$got"), want $(printf '%q' "$want")"
+		copy_fails=$((copy_fails + 1))
+	fi
+}
+
+# copy_check runs every copy action over every text case on the canned reply.
+copy_check() {
+	local host="$1" copy_dir="$ctl/copy-$1" by_hand="$manual" tries=0 copy_fails=0
+	case "$host" in
+	tmux | herdr | wezterm | kitty) ;;
+	*) by_hand=1 ;;
+	esac
+	while [ ! -e "$copy_dir/ready" ] && [ "$tries" -lt 30 ]; do
+		sleep 1
+		tries=$((tries + 1))
+	done
+	if [ ! -e "$copy_dir/ready" ]; then
+		echo "FAIL $host: the copy agent never drew its reply"
+		return 1
+	fi
+	sleep 3 # Diple finds the transcript and aligns the reply to it
+	local cols marker item1 item2 item3 item3last cjk hard cmd tool
+	# shellcheck disable=SC1090,SC1091
+	. "$copy_dir/layout"
+	local w="$cols" n cmdlast strip=$((item3last + 1))
+	n=$(wc -m <"$copy_dir/expect-cmd")
+	cmdlast=$((cmd + (n + 2 + cols - 1) / cols - 1))
+	[ -z "$by_hand" ] || printf '\n  The copy check in %s: make each copy in its window.\n' "$host" >&2
+	copy_step drag item1 "drag across the row '1. Use bold' from the left edge to the right" \
+		"$(m_press 1 "$item1")" "$(m_drag "$w" "$item1")" "$(m_release "$w" "$item1")"
+	copy_step after-list-marker item1-tail "drag from the U of 'Use' on that row to the right edge" \
+		"$(m_press 6 "$item1")" "$(m_drag "$w" "$item1")" "$(m_release "$w" "$item1")"
+	copy_step turn-marker marker "drag across 'Copy check' from the left edge, over the marker" \
+		"$(m_press 1 "$marker")" "$(m_drag "$w" "$marker")" "$(m_release "$w" "$marker")"
+	# The presses of a double- or triple-press go as one piece: a host's CLI
+	# can take longer to start than the window that makes them one gesture.
+	copy_step double-press word "double-click the word 'bold'" \
+		"$(m_click 11 "$item1")$(m_click 11 "$item1")"
+	copy_step triple-press item2 "triple-click the row '2. See the docs first'" \
+		"$(m_click 8 "$item2")$(m_click 8 "$item2")$(m_click 8 "$item2")"
+	copy_step strip-copy item3 "rest on item 3 until it lifts, then click copy on its strip" \
+		"$(m_rest 8 "$item3")" pause "$(m_click 18 "$strip")"
+	copy_step c-key cjk "rest the pointer on the row '漢字 café' until it lifts, then press c" \
+		"$(m_rest 4 "$cjk")" pause c
+	copy_step hard-break hard "drag from the start of 'First line' to the end of 'second line'" \
+		"$(m_press 1 "$hard")" "$(m_drag "$w" $((hard + 1)))" "$(m_release "$w" $((hard + 1)))"
+	copy_step soft-wrap cmd "drag from the start of the long echo command to the end of its last row" \
+		"$(m_press 1 "$cmd")" "$(m_drag "$w" "$cmdlast")" "$(m_release "$w" "$cmdlast")"
+	copy_step unaligned tool "drag from the start of 'ran a tool' to the end of 'and printed this'" \
+		"$(m_press 1 "$tool")" "$(m_drag "$w" $((tool + 1)))" "$(m_release "$w" $((tool + 1)))"
+	: >"$copy_dir/go"
+	copy_step during-output item1 \
+		"press at the start of '1. Use bold', hold while output appears, drag to the right edge" \
+		"$(m_press 1 "$item1")" "$(m_drag "$w" "$item1")" hold "$(m_release "$w" "$item1")"
+	[ "$copy_fails" -eq 0 ]
+}
+
 cleanup_hosts() {
 	tmux kill-session -t diple-verify 2>/dev/null
 	# A window this run opened is closed again, so a later run is never left
@@ -366,6 +553,9 @@ cleanup_hosts() {
 	fi
 	if [ -s "$ctl/herdr.pane" ]; then
 		herdr pane close "$(cat "$ctl/herdr.pane")" >/dev/null 2>&1
+	fi
+	if [ -s "$ctl/wezterm.gui" ]; then
+		kill "$(cat "$ctl/wezterm.gui")" >/dev/null 2>&1
 	fi
 }
 
@@ -391,6 +581,11 @@ for host in "${hosts[@]}"; do
 		;;
 	2) status=1; continue ;;
 	esac
+	if [ -n "$copy" ]; then
+		copy_check "$host" || status=1
+		wait_for_settled "$(pid_for "$host")" || true
+		continue
+	fi
 	if [ -n "$manual" ]; then
 		if ! wait_for_gesture "$host" "$(host_pid "$host")"; then
 			echo "FAIL $host: the gesture could not be made" >&2

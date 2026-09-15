@@ -78,6 +78,10 @@ paragraph's text, so each item of a tight list is a block of its own. The same
 paragraphs stand in for any block of an aligned turn that fails to match, and
 the blocks around it keep their rows.
 
+**`Marker(row string) string`** — the turn marker the row begins with, or `""`:
+`rules.Marker(row)`. The highlight never covers the marker and a copy never
+carries it, so it is the one decoration fact the session itself asks for.
+
 **`InputRow(screenRows []string) int`** — where the native input box begins, or
 `-1` when it is not on screen. Diple inserts the tray directly above it.
 

@@ -7,6 +7,7 @@ import (
 	"github.com/maximalfocus/diple/internal/adapter"
 	"github.com/maximalfocus/diple/internal/blocks"
 	"github.com/maximalfocus/diple/internal/card"
+	"github.com/maximalfocus/diple/internal/screen"
 )
 
 // This file is the raise: the transient lift Diple draws on the block under
@@ -97,21 +98,31 @@ func stripHit(left, px int) *stripChoice {
 
 // boundingBox is the block's box: from its smallest indent to one column past
 // its longest row, so a hanging indent keeps the edge straight and the short
-// rows' tails are filled.
-func boundingBox(rows []string, first, last, cols int) (left, right int) {
+// rows' tails are filled. It is measured in cells, so a wide character counts
+// both of its columns, and it starts past the agent's turn marker, which no
+// highlight covers.
+func boundingBox(lines []screen.Line, first, last, cols int,
+	marker func(screen.Line) int) (left, right int) {
 	left, right = cols, -1
-	for r := first; r <= last && r < len(rows); r++ {
+	for r := first; r <= last && r < len(lines); r++ {
 		if r < 0 {
 			continue
 		}
-		text := []rune(rows[r])
+		l := lines[r]
 		start, end := -1, -1
-		for i, c := range text {
-			if c != ' ' && c != '\t' {
-				if start < 0 {
-					start = i
+		for x := marker(l); x < len(l.Cells); x++ {
+			c := l.Cells[x]
+			if c.Width == 0 {
+				if end == x-1 {
+					end = x // the trailing half of a wide character
 				}
-				end = i
+				continue
+			}
+			if !isSpaceCell(c) && c.Rune != '\t' {
+				if start < 0 {
+					start = x
+				}
+				end = x
 			}
 		}
 		if start < 0 {
@@ -167,7 +178,7 @@ func (s *Session) raiseAtLocked(row, col int, now time.Time) bool {
 	if b.Kind == blocks.CodeBlock && b.Last < len(rows) {
 		text = strings.Join(rows[b.First:b.Last+1], "\n")
 	}
-	left, right := boundingBox(rows, b.First, b.Last, s.cols)
+	left, right := boundingBox(s.historyLinesLocked(), b.First, b.Last, s.cols, s.markerCells)
 	at := now
 	// While one block is raised the next skips the dwell.
 	if s.raised != nil {

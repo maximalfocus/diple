@@ -255,6 +255,9 @@ func (a *Adapter) Parse(r io.Reader) (*adapter.Transcript, error) {
 	return t, nil
 }
 
+// Marker returns the turn marker a row begins with.
+func (a *Adapter) Marker(row string) string { return rules.Marker(row) }
+
 func verified(v string) bool {
 	for _, ok := range Verified {
 		if ok == v {
