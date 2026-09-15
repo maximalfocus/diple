@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "sha": "265abe4807aec1ab52211f93f8ac7d15a44dc5af",
+  "host": "kitty",
+  "version": "0.45.0",
+  "mode": "plain",
+  "machine": "Linux 7.0.0-31-generic x86_64",
+  "capture": "kitty-plain.capture.jsonl",
+  "digest": "sha256:c6ac342cffd327cdaadcc47b74b7772f85ded600a92a533b8fc0ba9b047540db",
+  "result": "PASS",
+  "created": "2026-09-15T04:20:08.236373383Z"
+}

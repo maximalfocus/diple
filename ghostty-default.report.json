@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "sha": "265abe4807aec1ab52211f93f8ac7d15a44dc5af",
+  "host": "ghostty",
+  "version": "1.3.0-dev+0000000",
+  "mode": "default",
+  "machine": "Linux 7.0.0-31-generic x86_64",
+  "capture": "ghostty-default.capture.jsonl",
+  "digest": "sha256:c60c5d1bd0ed2684770a70a58a2b2ef190c271912f8887456e4f369962ff8217",
+  "result": "PASS",
+  "created": "2026-09-15T04:18:49.544357295Z"
+}
