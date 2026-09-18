@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "sha": "f0088f7db5947051c12a7b2ec938f28fff334d2e",
+  "host": "herdr",
+  "version": "0.8.2",
+  "mode": "plain",
+  "machine": "Linux 7.0.0-31-generic x86_64",
+  "capture": "herdr-plain.capture.jsonl",
+  "digest": "sha256:35c5a9bcbcb7b826e4bce51bcfc90bf094d64f94e098c8210d4d0c2291b620d1",
+  "result": "PASS",
+  "created": "2026-09-18T07:28:05.268934934Z"
+}

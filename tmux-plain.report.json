@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "sha": "f0088f7db5947051c12a7b2ec938f28fff334d2e",
+  "host": "tmux",
+  "version": "3.6",
+  "mode": "plain",
+  "machine": "Linux 7.0.0-31-generic x86_64",
+  "capture": "tmux-plain.capture.jsonl",
+  "digest": "sha256:30279c1a467eb0b9a55cb4b5560a889fbd9aa98b717ba4fa6820d0a2839ec5cc",
+  "result": "PASS",
+  "created": "2026-09-18T07:27:39.988590719Z"
+}
