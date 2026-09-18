@@ -231,23 +231,23 @@ fixtures and of one committed capture per host and drawing mode under
 `testdata/hosts/`; and `tmux` and `herdr` driven live and headless. One check,
 `gate`, fails unless all of them succeeded and a change outside the
 documentation allowlist carries tier 5: head-bound reports from developers'
-live runs in every host, carried through `refs/evidence/` and verified by
+live runs in every claimed host, carried through `refs/evidence/` and verified by
 `internal/hostcheck`. Tests under `internal/` never sleep on the wall clock,
 and `internal/acceptance` enforces that and the case lists under
 `docs/acceptance/`.
 
 `scripts/verify-hosts.sh [--plain] [--manual] [--evidence <dir>] [--baseline] [--copy] [host…]`
-records a wrapped session in each host the portability list names,
-hands the gesture to the hosts R-014 calls driven, and runs
+records a wrapped session in each host R-014 claims, hands it the gesture,
+and runs
 `internal/hostcheck` over the capture — the envelope asked for and given back,
 the agent's bytes forwarded unchanged with an empty tray, no 24-bit colour from
 Diple, a card made and a copy taken where the host is driven, and the terminal
 restored. Diple's gestures are ordinary SGR mouse reports, so a host that can
-type into a window can deliver them. `--manual` starts the session and waits
-for the person at the keyboard to make the gesture, which is how a
-pass-through host is shown to deliver it. It is not part of CI, because it
-needs those terminals installed; `RELEASE.md` records the result with the
-version each host was verified at.
+type into a window can deliver them, and every claimed host can, so no run
+needs a person at the keyboard or an unlocked screen. `--manual` waits for
+that person instead, which is the only way to show a held host delivers a
+gesture. It is not part of CI, no gate waits on it, and `RELEASE.md` records
+the result with the version each host was verified at.
 
 `--copy` is the copy check instead. A canned agent writes a transcript and
 draws a reply holding every case R-015 names — a list item with emphasis,
@@ -255,12 +255,17 @@ inline code and a link, wide and combined characters, an agent wrap and a
 terminal wrap, a hard break, unaligned output — and each copy action is made on
 it in turn: drag, double- and triple-press, the strip's `copy`, and `c`. Before
 each, the clipboard is set to a sentinel; after, it is read back and must hold
-exactly what the selection shows. A pass-through host gets each step from the
-person at the keyboard.
+exactly what the selection shows. A claimed host is typed every step; a held
+host named on the command line gets them from the person at the keyboard,
+which is how S-020 will run it.
 
-`internal/hostcheck` owns the class table: WezTerm, kitty, `tmux`, and `herdr`
-are driven, and every other host is pass-through only. The distinction is the
-whole point of the check. A driven host whose capture carries no gesture was
+`internal/hostcheck` owns both lists: WezTerm, kitty, `tmux`, and `herdr` are
+claimed, and Ghostty, iTerm2 and Terminal.app are held — passed through,
+replayed from their committed captures so their forwarding cannot rot
+unnoticed, demanded by no evidence gate, and returned to the claimed list by
+S-020. It owns the class table too: the claimed hosts are driven, and every
+other host is pass-through only. That distinction is the whole point of the
+check. A driven host whose capture carries no gesture was
 not driven at all — a control interface that moved between host versions, a
 window the host's own CLI cannot address, a control socket too long to bind —
 and it fails rather than falling back to the pass-through check, because a

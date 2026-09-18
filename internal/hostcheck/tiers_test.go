@@ -21,12 +21,12 @@ func hostCapture(t *testing.T, host string) string {
 	return capture(t, reply)
 }
 
-// committed files a capture for every portability host and drawing mode under
-// a fresh directory, leaving out the one named by skip.
+// committed files a capture for every replayed host and drawing mode under a
+// fresh directory, leaving out the one named by skip.
 func committed(t *testing.T, skip string) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, h := range portability {
+	for _, h := range replayed() {
 		for _, m := range drawingModes {
 			if h+" "+m == skip {
 				continue
@@ -81,8 +81,9 @@ func TestAReplayRegressionIsReported(t *testing.T) {
 	}
 }
 
-// evidence writes a report for every host and drawing mode at sha, leaving out
-// the one named by skip.
+// evidence writes a report for every claimed host and drawing mode at sha,
+// leaving out the one named by skip. A held host gets none: the gate wants
+// none.
 func evidence(t *testing.T, sha, skip string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -116,16 +117,20 @@ func TestEvidenceAtTheHeadForEveryHostPasses(t *testing.T) {
 }
 
 func TestMachinesAggregate(t *testing.T) {
-	// One machine without iTerm2, another with only it: together they cover
+	// One machine without kitty, another with only it: together they cover
 	// the list, and neither is waived.
-	linux := evidence(t, head, "iterm2 default")
+	linux := evidence(t, head, "kitty default")
 	mac := t.TempDir()
-	r := report{Format: reportFormat, SHA: head, Host: "iterm2", Version: "3.7.0", Mode: "default", Machine: "mac", Created: time.Now().UTC()}
-	if err := writeReport(hostCapture(t, "iterm2"), mac, r); err != nil {
+	r := report{
+		Format: reportFormat, SHA: head, Host: "kitty", Version: "0.48.2",
+		Mode: "default", Machine: "mac", Created: time.Now().UTC(),
+	}
+	if err := writeReport(hostCapture(t, "kitty"), mac, r); err != nil {
 		t.Fatal(err)
 	}
-	if f := verifyEvidence(head, []string{linux}, time.Now(), defaultMaxAge, io.Discard); !hasFailure(f, "incomplete: no passing evidence for iterm2 default") {
-		t.Fatalf("one machine alone passed: %v", f)
+	one := verifyEvidence(head, []string{linux}, time.Now(), defaultMaxAge, io.Discard)
+	if !hasFailure(one, "incomplete: no passing evidence for kitty default") {
+		t.Fatalf("one machine alone passed: %v", one)
 	}
 	if f := verifyEvidence(head, []string{linux, mac}, time.Now(), defaultMaxAge, io.Discard); len(f) != 0 {
 		t.Fatalf("aggregated evidence failed: %v", f)
@@ -156,6 +161,45 @@ func TestMissingIncompleteStaleExpiredAndTamperedEvidenceFail(t *testing.T) {
 	}
 	if f := verifyEvidence(head, []string{t.TempDir()}, time.Now(), defaultMaxAge, io.Discard); !hasFailure(f, "the evidence holds no report") {
 		t.Errorf("empty bundle: %v", f)
+	}
+}
+
+// TestTheGateDemandsTheClaimedHostsAndNoHeldOne is what S-019 narrowed. The
+// evidence a developer can record with nobody at the keyboard is exactly the
+// evidence the gate asks for.
+//
+// Covers S-019 T-01.
+func TestTheGateDemandsTheClaimedHostsAndNoHeldOne(t *testing.T) {
+	f := verifyEvidence(head, []string{evidence(t, head, "")}, time.Now(), defaultMaxAge, io.Discard)
+	if len(f) != 0 {
+		t.Fatalf("evidence for the claimed hosts alone failed: %v", f)
+	}
+	for _, h := range held {
+		for _, m := range drawingModes {
+			if hasFailure(f, h+" "+m) {
+				t.Errorf("the gate waits on the held host %s %s", h, m)
+			}
+		}
+	}
+	missing := evidence(t, head, "kitty plain")
+	f = verifyEvidence(head, []string{missing}, time.Now(), defaultMaxAge, io.Discard)
+	if !hasFailure(f, "incomplete: no passing evidence for kitty plain") {
+		t.Fatalf("a missing claimed host passed: %v", f)
+	}
+}
+
+// TestAHeldHostKeepsReplaying is the other half of the narrowing: nothing is
+// deleted that S-020 would have to record again, and tier 3 costs nobody a
+// keystroke.
+//
+// Covers S-019 T-02.
+func TestAHeldHostKeepsReplaying(t *testing.T) {
+	if f := replayCommitted(committed(t, ""), io.Discard); len(f) != 0 {
+		t.Fatalf("a complete set failed: %v", f)
+	}
+	f := replayCommitted(committed(t, "ghostty default"), io.Discard)
+	if len(f) != 1 || f[0] != "ghostty default: no committed capture" {
+		t.Fatalf("failures = %v", f)
 	}
 }
 
