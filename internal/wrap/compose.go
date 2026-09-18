@@ -161,7 +161,8 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 			reverseSpan(&base[r], s.raised.left, s.raised.right)
 		}
 	}
-	// A drag selection, which may cross blocks and rows.
+	// A drag selection, which may cross blocks and rows. No highlight covers
+	// the agent's turn marker, which no copy carries either.
 	if s.textSel != nil {
 		first, firstCol, last, lastCol := s.textSel.rows(s.dropped())
 		for h := first; h <= last; h++ {
@@ -175,6 +176,9 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 			}
 			if h == last {
 				to = lastCol
+			}
+			if m := s.markerCells(base[r]); from < m {
+				from = m
 			}
 			reverseSpan(&base[r], from, to)
 		}
@@ -195,6 +199,9 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 				if h == sp.EndRow {
 					to = sp.EndCol
 				}
+				if m := s.markerCells(base[r]); from < m {
+					from = m
+				}
 				for x := from; x <= to && x < len(base[r].Cells); x++ {
 					base[r].Cells[x].Attr.Flags |= screen.Underline | screen.Reverse
 				}
@@ -202,7 +209,7 @@ func (s *Session) physicalLocked() (lines []screen.Line, cx, cy int, cursorVisib
 		} else {
 			for h := s.sel.first; h <= s.sel.last; h++ {
 				if r := toScreen(h); r >= 0 && r < len(base) {
-					reverseRow(&base[r])
+					reverseSpan(&base[r], s.markerCells(base[r]), len(base[r].Cells)-1)
 				}
 			}
 		}

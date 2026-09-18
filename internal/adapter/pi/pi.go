@@ -31,6 +31,9 @@ var Verified = []string{"3"}
 // rules rather than opened by a marker.
 var rules = align.Rules{Fence: "```"}
 
+// Marker is always "": pi marks no turns.
+func (a *Adapter) Marker(row string) string { return rules.Marker(row) }
+
 // Adapter implements adapter.Adapter for pi.
 type Adapter struct {
 	// Home is the user's home directory; empty means the current user's.

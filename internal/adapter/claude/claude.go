@@ -278,6 +278,9 @@ func (a *Adapter) Fallback(rows []string) []adapter.TurnAlignment {
 	return adapter.Paragraphed(rows, rules)
 }
 
+// Marker returns the turn marker a row begins with: ⏺, or ● on Linux.
+func (a *Adapter) Marker(row string) string { return rules.Marker(row) }
+
 // InputRow finds Claude Code's input box on the visible screen: the last
 // row that begins with the prompt marker, together with the rule row drawn
 // directly above it when there is one.
