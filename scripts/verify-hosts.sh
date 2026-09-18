@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Records a wrapped session in each host the portability list names, types one
-# Diple gesture into it where R-014 calls the host driven, and checks the
-# capture. Run it from the repository root:
+# Records a wrapped session in each host R-014 claims, types one Diple gesture
+# into it, and checks the capture. Every claimed host is driven, so a run needs
+# nobody at the keyboard. A host R-014 holds — Ghostty, iTerm2, Terminal.app —
+# runs only when the command line names it, under --manual. Run it from the
+# repository root:
 #
 #   scripts/verify-hosts.sh [--plain] [--manual] [--evidence <dir>] [--baseline] [host...]
 #
-# With no host arguments it does every host it can start on this machine and
-# says which ones it skipped, so the release checklist can record both. A host
+# With no host arguments it does every claimed host it can start on this
+# machine and says which ones it skipped, so the release checklist can record
+# both. A held host is never in that default set. A host
 # that is absent is reported apart from one that is present and could not be
 # driven: they are different facts, and only the first is a reason to skip.
 #
@@ -371,7 +374,7 @@ cleanup_hosts() {
 
 hosts=("$@")
 if [ "${#hosts[@]}" -eq 0 ]; then
-	hosts=(terminal.app iterm2 wezterm kitty ghostty tmux herdr)
+	hosts=(wezterm kitty tmux herdr)
 fi
 
 status=0

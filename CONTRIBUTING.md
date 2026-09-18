@@ -44,11 +44,14 @@ host-evidence check succeeded.
    provisioned explicitly, and an absent one fails. For live copy readback the
    Linux runners' clipboard service is an Xvfb display read with `xclip`, and
    the macOS runners' is the system pasteboard read with `pbpaste`.
-5. **Live windowed hosts.** WezTerm, Kitty, Ghostty, iTerm2 and Terminal.app
-   need a desktop, so developers run them with the same script at the versions
-   `RELEASE.md` records; `--manual` leaves the gesture to the person at the
-   keyboard in a pass-through host. Machines aggregate: a host missing on one
-   machine is run on another, never waived.
+5. **Live windowed hosts.** WezTerm and Kitty need a desktop, so developers run
+   them with the same script at the versions `RELEASE.md` records. Every
+   claimed host is driven, so the script types its own gestures: no run needs a
+   person at the keyboard or an unlocked screen. Machines aggregate: a host
+   missing on one machine is run on another, never waived. Ghostty, iTerm2 and
+   Terminal.app are held — passed through, replayed from their committed
+   captures, claimed by no list and demanded by no gate — and `--manual` still
+   runs one by hand, which is what S-020 returns them with.
 
 Hosts that can be typed into from outside must also show that a gesture made
 a card, and one of those failing to take the gesture is a failure, not a
@@ -58,13 +61,13 @@ lesser pass.
 
 A change that touches anything outside the documentation allowlist —
 `LICENSE`, the top-level Markdown files, and Markdown under `docs/` apart from
-`docs/acceptance/` — needs tier-5 evidence for every host in both drawing
-modes, bound to the pull request's final head. `internal/hostcheck classify`
+`docs/acceptance/` — needs tier-5 evidence for every claimed host in both
+drawing modes, bound to the pull request's final head. `internal/hostcheck classify`
 decides, and changing the classifier needs evidence too.
 
 ```
-scripts/verify-hosts.sh --evidence /tmp/ev wezterm kitty ghostty tmux herdr
-scripts/verify-hosts.sh --plain --evidence /tmp/ev wezterm kitty ghostty tmux herdr
+scripts/verify-hosts.sh --evidence /tmp/ev wezterm kitty tmux herdr
+scripts/verify-hosts.sh --plain --evidence /tmp/ev wezterm kitty tmux herdr
 scripts/evidence.sh upload /tmp/ev
 ```
 
