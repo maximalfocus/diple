@@ -42,6 +42,10 @@ func TestTerminalAppDoesNotAnswerForTheClipboard(t *testing.T) {
 // TestAMultiplexerDoesNotAnswerEither: it forwards the sequence to whatever is
 // outside it, which may ignore it, and the copy would be lost with nothing to
 // report. Where this machine has a clipboard of its own, Diple writes that.
+// Terminal.app's exclusion outlives R-014's claim on it: passing a host
+// through is not claiming it.
+//
+// Covers S-019 T-03.
 func TestAMultiplexerDoesNotAnswerEither(t *testing.T) {
 	for _, in := range []map[string]string{
 		{"TMUX": "/tmp/tmux-501/default,1,0"},

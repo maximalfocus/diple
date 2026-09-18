@@ -24,10 +24,26 @@ var subcommands = map[string]func(args []string) int{
 	"herdr-pane": herdrPaneMain,
 }
 
-// portability is R-014's host list, by the names scripts/verify-hosts.sh uses.
-// Tier 3 replays a committed capture of each in both drawing modes, and tier-5
+// portability is R-014's claimed host list, by the names
+// scripts/verify-hosts.sh uses. Every one of them is driven, so tiers 4 and 5
+// run with nobody at the keyboard and the screen free to be locked. Tier 3
+// replays a committed capture of each in both drawing modes, and tier-5
 // evidence must cover each in both.
-var portability = []string{"terminal.app", "iterm2", "wezterm", "kitty", "ghostty", "tmux", "herdr"}
+var portability = []string{"wezterm", "kitty", "tmux", "herdr"}
+
+// held are the hosts R-014 no longer claims. Nothing can type into them from
+// outside, so verifying one needs a person at an unlocked machine, and a
+// verification that needs that is one that stops getting run. Diple still
+// passes them through, and tier 3 still replays their committed captures so
+// their forwarding cannot rot unnoticed, but no evidence gate waits on them.
+// S-020 returns them to the claimed list, verified by hand.
+var held = []string{"terminal.app", "iterm2", "ghostty"}
+
+// replayed is every host tier 3 must hold a committed capture for: the claimed
+// hosts and the held ones alike, since replay costs nobody a keystroke.
+func replayed() []string {
+	return append(append([]string{}, portability...), held...)
+}
 
 // drawingModes are the modes a capture is recorded in: the default palette,
 // and --plain.
@@ -69,7 +85,7 @@ func modeKnown(mode string) bool {
 }
 
 // replayMain is tier 3: every committed capture replays against this build,
-// and every portability host has one in both drawing modes.
+// and every claimed and held host has one in both drawing modes.
 func replayMain(args []string) int {
 	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
 	if err := fs.Parse(args); err != nil {
@@ -130,7 +146,7 @@ func replayCommitted(dir string, out io.Writer) []string {
 			}
 		}
 	}
-	for _, h := range portability {
+	for _, h := range replayed() {
 		for _, mode := range drawingModes {
 			if !seen[h+" "+mode] {
 				failures = append(failures, fmt.Sprintf("%s %s: no committed capture", h, mode))
@@ -238,12 +254,15 @@ func evidenceMain(args []string) int {
 }
 
 // verifyEvidence judges every report in dirs against head and requires a
-// passing one for each portability host in each drawing mode. Machines are
-// aggregated: evidence from several directories covers the list together, and
-// no host is waived because one machine lacks it.
+// passing one for each claimed host in each drawing mode. A held host is
+// demanded of nobody, so a developer records the whole gate unattended.
+// Machines are aggregated: evidence from several directories covers the list
+// together, and no host is waived because one machine lacks it.
 func verifyEvidence(head string, dirs []string, now time.Time, maxAge time.Duration, out io.Writer) []string {
 	if len(dirs) == 0 {
-		return []string{"no host evidence: a change outside the documentation allowlist needs a head-bound report for every host and drawing mode"}
+		return []string{"no host evidence: a change outside the documentation " +
+			"allowlist needs a head-bound report for every claimed host and " +
+			"drawing mode"}
 	}
 	var failures []string
 	covered := map[string]bool{}

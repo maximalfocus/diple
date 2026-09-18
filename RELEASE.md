@@ -74,9 +74,14 @@ CLI, and says which drawing modes it was recorded in.
 | kitty | driven | pass, gesture + card + copy, both modes | 0.48.2 | macOS 26.6 arm64 |
 | `tmux` | driven | pass, gesture + card + copy, both modes | 3.7c | macOS 26.6 arm64 |
 | `herdr` | driven | pass, gesture + card + copy, both modes | 0.7.4 | macOS 26.6 arm64 |
-| Terminal.app | pass-through | pass, live gesture + card + copy, both modes | 2.15 | macOS 26.6 arm64 |
-| Ghostty | pass-through | pass, live gesture + card + copy, both modes | 1.3.1 | macOS 26.6 arm64 |
-| iTerm2 | pass-through | pass, live gesture + card + copy, both modes | 3.7.0 | macOS 26.6 arm64 |
+| Terminal.app | held | passed by hand at this version, claimed no longer | 2.15 | macOS 26.6 arm64 |
+| Ghostty | held | passed by hand at this version, claimed no longer | 1.3.1 | macOS 26.6 arm64 |
+| iTerm2 | held | passed by hand at this version, claimed no longer | 3.7.0 | macOS 26.6 arm64 |
+
+The last three passed by hand, at those versions, before R-014 narrowed its
+claim to the hosts something can type into from outside. Diple still passes
+them through and tier 3 still replays their captures, but no list claims them
+and no gate waits on them until S-020 verifies them by hand again.
 
 The copy was read back from the machine rather than inferred: with a sentinel on
 the pasteboard before each run, `pbpaste` after it returned the dragged text.
