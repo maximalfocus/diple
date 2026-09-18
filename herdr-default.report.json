@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "sha": "7857e42ee543e77605d8ce44d01f3ffbb7c38c3b",
+  "host": "herdr",
+  "version": "0.9.1",
+  "mode": "default",
+  "machine": "Darwin 25.6.0 arm64",
+  "capture": "herdr-default.capture.jsonl",
+  "digest": "sha256:25618cc5ebb1a7dc80d7f9e06c4639130431d3b37ecf200ff8b2498f02fbb950",
+  "result": "PASS",
+  "created": "2026-09-18T07:39:46.463678Z"
+}

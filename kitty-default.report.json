@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "sha": "7857e42ee543e77605d8ce44d01f3ffbb7c38c3b",
+  "host": "kitty",
+  "version": "0.48.2",
+  "mode": "default",
+  "machine": "Darwin 25.6.0 arm64",
+  "capture": "kitty-default.capture.jsonl",
+  "digest": "sha256:417e8477b6d7b27c21d656398f42509f6b5394f0cedc7ccc227274e17d6dfe26",
+  "result": "PASS",
+  "created": "2026-09-18T07:38:55.618314Z"
+}
