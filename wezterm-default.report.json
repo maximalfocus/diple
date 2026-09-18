@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "sha": "f0088f7db5947051c12a7b2ec938f28fff334d2e",
+  "host": "wezterm",
+  "version": "20240203-110809-5046fc22",
+  "mode": "default",
+  "machine": "Darwin 25.6.0 arm64",
+  "capture": "wezterm-default.capture.jsonl",
+  "digest": "sha256:05cb08054913d9ba9dfa83b876274f33ed63e396d3c826d01ac5a7bf5ee88a9d",
+  "result": "PASS",
+  "created": "2026-09-18T07:26:18.378863Z"
+}
